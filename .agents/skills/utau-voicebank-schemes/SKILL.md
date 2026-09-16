@@ -11,7 +11,7 @@ UTAU voicebanks come in several recording and oto.ini configuration schemes, eac
 
 **Important:** UTAU's file formats and alias conventions are **community conventions, not rigid specifications**. There is no formal standard — conventions evolved organically and vary across languages, voicebank creators, and eras. Pitch can be annotated as a suffix (`a かC4`), a prefix (`C4_あ`), or embedded in the filename. Expression/appends systems vary by creator (強/弱, soft/power, etc.). oto.ini is traditionally **Shift-JIS encoded**.
 
-KiraOtoToolbox tools are designed to be convention-agnostic at their core. Where presets exist (like `copyOrReplaceByAlias`'s Syo式→十月式 preset), they target specific de facto standards, but the underlying logic treats aliases and filenames as arbitrary strings and numeric parameters as raw values.
+Tools that process aliases should be convention-agnostic at their core: aliases and filenames are arbitrary strings and numeric parameters are raw values. Presets may target specific de facto standards, but the underlying logic should not assume them.
 
 ---
 
@@ -91,8 +91,6 @@ A hybrid scheme that records both CV (forward) and VC (backward) parts. Instead 
 **Why CVVC exists:** It achieves VCV-like smoothness with significantly fewer recordings than full VCV. Japanese CVVC: ~120-150 recordings vs VCV's ~200+. The VC entries are shared across all CV entries with the same consonant.
 
 **oto.ini for VC entries:** The fixed region covers the vowel-to-consonant transition. The Pre-utterance position is set within the VC recording to control how much of the preceding vowel is heard.
-
-**In our tools:** The `cvvcPartSplit` tool directly operates on CVVC-structured entries to split them into CV and VC parts.
 
 ### CV-VV / 拡張整音 (Expanded Solo-tone) — Chinese
 
@@ -180,14 +178,3 @@ UTAU finds the matching note name and appends the suffix to the alias being look
 | CVVC | ~120-150 | Smooth | Japanese, Chinese, Korean | Medium |
 | CV-VV (拡張整音) | ~80-100 | Smooth with coda | Chinese | Medium |
 | VCCV | ~1066 | Smooth | English (adaptable) | Very High |
-
-## How This Relates to Our Tools
-
-Scheme-specific concerns:
-
-- **cvvcPartSplit**: Identifies CV vs VC entries by alias format (space-separated vs. plain). Must understand VC alias conventions (`a k`, `i k`) and the begin/end pattern matching for CV identification.
-- **copyOrReplaceByAlias**: Contains a built-in preset for Syo式→十月式 scheme migration (CV aliases expanded for CV-VV splitting). Rules map `ba→ban`, `bang→bao`, `bie→bian`, etc.
-- **mergeOto**: Merges voicebank folders — must handle different schemes coexisting and alias conflicts across schemes.
-- **vowelCrossfading**: CVList/VList pattern matching against VCV-style aliases. `removeNumberSuffixWhenMatching` strips digit suffixes for cross-scheme compatibility.
-- **removeAffix / addAffix / setAlias**: Alias manipulation used for pitch suffix management, scheme conversion, and alias normalization.
-- **CV-VV multi-entry dependency**: `removeDuplicate`/`removeBlank` must not break paired entries like `lan` + `_an` that are required for CV-VV to function.
