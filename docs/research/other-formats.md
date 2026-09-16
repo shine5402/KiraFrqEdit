@@ -22,10 +22,22 @@ frqeditor converts between `dio`, `frc`, `frq`, `vs4ufrq`, `pmk` (lossy), and re
 
 ## `dio` + `star` + `platinum` (w4u engine)
 
-- Three sidecar files; `dio` is the frequency table but w4u synthesis consumes `star`/`platinum`.
-- Editing `dio` does **not** affect output unless star/platinum are regenerated — no known tool
-  does that. So don't promise w4u support beyond read/convert.
+- Three sidecar files next to the wav, named `<basename>.dio` / `.star` / `.platinum` (no `_wav`
+  suffix). `dio` is the f0 table; `star`/`platinum` are derived data that synthesis consumes.
+- **Partial `.dio` layout** (black-box, from w4u output): `char[8]` magic `"wrld-dio"`, `int32`
+  input sample count, `int32` sample rate, `int32` frame count, then `frames × (float64
+  time_seconds, float64 f0_hz)`. Size = `20 + 16*N`, frame step = hop/fs (256/44100). Unvoiced f0
+  is 0. Verified: frame 500 of `aR.dio` = (2.9025 s, 261.59 Hz) for a C4 sample.
+- **Editing `dio` cannot affect output (verified 2026-09, black-box).** w4u re-analyzes when any
+  of the three files is missing: we doubled every f0 in an existing `.dio`, deleted `.star` and
+  `.platinum`, re-ran w4u — it re-ran DIO analysis, restored the original `.dio` values
+  (hash-identical), and produced a byte-identical output wav. The "delete star/platinum" trick
+  does **not** work. Don't promise w4u write support; read/convert only.
 - No key frequency stored (computed at synthesis).
+- Standalone probing notes: `engines_original\w4u.exe` needs `libfftw3-3.dll` (ships in the UTAU
+  root) on its DLL search path; it uses the standard 13-argument UTAU resampler CLI
+  (`in.wav out.wav pitch velocity flags offset length fixed end volume mod tempo pitchbend`).
+  Probe scripts in `.local/w4u_probe/` (machine-local).
 
 ## Engine behavior matrix (manual p.32, p.39, p.42–46)
 
@@ -46,7 +58,7 @@ frqeditor converts between `dio`, `frc`, `frq`, `vs4ufrq`, `pmk` (lossy), and re
 
 Notes:
 - `frqeditor`-repairable engines: EFB-GT, fresamp, model4, phavoco, resampler, TIPS, VS4U, WARP.
-  Not repairable: bkh01, tn_fnds (no file). w4u edits have no effect on output.
+  Not repairable: bkh01, tn_fnds (no file). w4u edits have no effect on output (verified; see above).
 - Partial unvoiced stretches are basically safe for every engine; fully-unvoiced frq makes
   EFB-GT/WARP silent.
 - `mod` valid range is -200..200; `phavoco` silent below -100 and `fresamp` dangerously loud below
@@ -56,5 +68,6 @@ Notes:
 
 - `vs4ufrq` byte layout and whether it stores amplitude.
 - `frc` byte layout.
-- `dio`/`star`/`platinum` layouts and whether `star` can be regenerated from edited dio.
+- `star`/`platinum` byte layouts (w4u-internal; probably FFT-frame data).
+- Whether w4u exposes a flag to trust an existing `dio` (none found in the binary's strings).
 - Which engines' f0 tables carry volume vs not (frq/mrq yes, pmk no, others unknown).
