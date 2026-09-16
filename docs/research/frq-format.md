@@ -14,7 +14,7 @@ The `.frq` file is the default UTAU frequency table, used by `resampler`, `fresa
 | 0x00 | `char[8]` | magic `"FREQ0003"` (exact, no NUL) |
 | 0x08 | `int32` | `hop` — samples between f0 frames. `256` in all 4,650 local files; UTAU assumes 44.1 kHz, so 5.8 ms |
 | 0x0C | `float64` | average f0 / key frequency in **Hz** |
-| 0x14 | `byte[16]` | reserved. Usually zero, but **do not assume**: 1,253 local files store `44100` as int32 at 0x14 (`44 AC 00 00` = sample rate) |
+| 0x14 | `byte[16]` | reserved. Usually zero, but **do not assume**: 1,257 local files have non-zero reserved bytes - 362 store `44100` as int32 at 0x14 (`44 AC 00 00` = sample rate), 895 carry the space-padded ASCII marker ` speedwagon` (SpeedWagon provenance) |
 | 0x24 | `int32` | frame count `N` |
 | 0x28 | `float64[N]` | f0 per frame in Hz; `0.0` = unvoiced ("周波数なし") |
 | 0x30 | `float64[N]` | amplitude per frame (raw scale, see below) |
@@ -75,5 +75,7 @@ unvoiced consonant/breath regions should stay unvoiced.
 `.local/frq_scan2.py` + `.local/verify_formats.py` over `voice/**/*.frq`:
 
 - 4,650/4,650 files: magic `FREQ0003`, hop 256, size `40+16*N`, count field matches file size.
-- 1,253 files have non-zero reserved bytes, always `44 AC 00 00` (44100) in the first 4 bytes.
+- 1,257 files have non-zero reserved bytes: 362 store `44 AC 00 00` (44100) in the first 4 bytes,
+  895 carry the space-padded ASCII marker ` speedwagon` (SpeedWagon-generated).
+- Amplitude array scales per writer are analysed in [frq-amplitude-scale.md](frq-amplitude-scale.md).
 - Example `aR_wav.frq`: N=690, avg=345.868 Hz, 256/690 frames unvoiced, amp up to 7082.8.
