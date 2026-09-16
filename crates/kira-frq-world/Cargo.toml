@@ -1,0 +1,13 @@
+[package]
+name = "kira-frq-world"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Safe Rust wrapper over vendored WORLD (DIO / Harvest / StoneMask)"
+license = "BSD-3-Clause"
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+hound = "3.5"
