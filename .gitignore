@@ -1,0 +1,3 @@
+# Machine-local files
+*.local.md
+.local/

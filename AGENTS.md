@@ -1,5 +1,43 @@
 # KiraFrqEdit
 
+KiraFrqEdit is an open-source recreation of frqeditor: a tool to inspect, edit, check and
+batch-generate UTAU frequency tables (`frq` and related formats). Frequency tables store the f0
+contour and voiced/unvoiced information used by resampler engines; when they are wrong, UTAU
+outputs wrong pitch, glitches and pops.
+
+## Goal and scope
+
+- Native read/write/edit for UTAU `frq` (f0 + volume + key frequency).
+- frqeditor-parity automatic check/repair for half/double-pitch errors and unvoiced holes,
+  without its quirks (spec: `docs/research/frqeditor-manual-notes.md`).
+- Batch f0 generation with WORLD (DIO/Harvest), replacing SpeedWagon-style workflows.
+- Conversion/interop across engine formats: `frq`, `pmk`, `mrq`; best effort `vs4ufrq`, `frc`,
+  `dio`/`star`/`platinum` (milestone 2+, see `docs/research/other-formats.md`).
+- CLI for batch operations plus an egui GUI.
+
+## Planned stack
+
+- Rust workspace: core library crate, CLI binary, egui/eframe GUI.
+- C/C++ only where necessary (WORLD), built from vendored source via `cc`/`cxx`, wrapped in a safe
+  Rust API; keep FFI/`unsafe` confined to one module. Not started yet.
+- File formats implemented clean-room from `docs/research/`; no code from proprietary tools.
+
+## Status
+
+- 2026-09: research phase done, implementation not started. Next: milestone-1 issues
+  (frq parser/writer, editor model, WORLD integration spike).
+- Research results live in `docs/research/` (README is the index); format specs were verified
+  against real files from the local UTAU corpus where possible.
+
+## Repo layout
+
+- `docs/research/` — research notes and verified format specs; read before touching formats.
+- `docs/agents/` — agent workflow conventions (issue tracker, triage labels, domain docs).
+- `docs/adr/` — architecture decision records, created as decisions are made.
+- `AGENTS.local.md` — machine-local state (paths, corpus, tooling, `.local/` artifacts such as the
+  frqeditor manual PDF and its extracted text). Gitignored, not auto-injected by opencode, so check
+  it when machine specifics matter.
+
 ## Agent skills
 
 ### Issue tracker
