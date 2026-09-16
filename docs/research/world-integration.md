@@ -1,8 +1,10 @@
 # WORLD integration spike: vendored build and Rust wrapper
 
 Status: task spike for wayfinder ticket [#6] on branch `research/world-integration`
-(2026-09-17). Proves the vendored-WORLD build path on Windows MSVC and the crate/module layout
-that will graduate into the workspace scaffold. Feeds [#7] (core analysis-to-writer API).
+(2026-09-17). Proves the vendored-WORLD build path on Windows with both MSVC and clang-cl, and
+the crate/module layout that will graduate into the workspace scaffold. Cross-platform is a
+standing goal: the build stays toolchain-agnostic, with Unix clang/gcc expected to work (not
+exercised on this machine; see below). Feeds [#7] (core analysis-to-writer API).
 
 [#6]: https://github.com/shine5402/KiraFrqEdit/issues/6
 [#7]: https://github.com/shine5402/KiraFrqEdit/issues/7
@@ -15,7 +17,7 @@ that will graduate into the workspace scaffold. Feeds [#7] (core analysis-to-wri
 - Committed unmodified at `third_party/World/` (`LICENSE.txt` + full upstream `src/`); pin and
   provenance in `third_party/World/VENDORED.md`. No submodule.
 
-## Build mechanics (`cc` 1.4.6, MSVC)
+## Build mechanics (`cc` 1.4.6; MSVC and clang-cl)
 
 `crates/kira-frq-world/build.rs` compiles six translation units into static lib `world`:
 `dio.cpp`, `harvest.cpp`, `stonemask.cpp`, `common.cpp`, `fft.cpp`, **`matlabfunctions.cpp`**.
@@ -32,6 +34,14 @@ that will graduate into the workspace scaffold. Feeds [#7] (core analysis-to-wri
 - Toolchain exercised: rustc/cargo 1.98.1 (`x86_64-pc-windows-msvc`), VS 2022 Build Tools
   (`cl.exe` 14.44.35207), `cc` 1.4.6, `hound` 3.5.1. `cargo test` needs no vcvars shell; `cc`
   locates MSVC itself.
+- Same tree builds with LLVM on Windows: `CC=CXX="clang-cl"`
+  (clang-cl 23.1.1), `cargo clean` first so `cc` re-runs. All tests pass and f0 output is
+  identical to the MSVC build (voiced counts and means match exactly). `cc` picks the archiver;
+  no extra configuration.
+- `build.rs` is toolchain-agnostic: `/EHsc` goes through `flag_if_supported`, so GNU-style
+  clang/gcc would skip it, and upstream WORLD builds with gcc/clang via its own CMake/makefile.
+  Unix toolchains are expected to work but were not exercised on this machine; the CI matrix
+  belongs to the workspace-scaffold ticket.
 
 ## Shim style: raw `extern "C"` shim (cxx not needed)
 
@@ -77,6 +87,8 @@ that will graduate into the workspace scaffold. Feeds [#7] (core analysis-to-wri
   | real 5.48 s voice wav | DIO | 97 ms | 56x | +124 ms |
   | real 5.48 s voice wav | Harvest | 1209 ms | 5x | +63 ms |
 
+  clang-cl 23.1.1 on the same inputs is slightly faster: synthetic sweep DIO 75 ms (53x) / +49 ms;
+  Harvest 441 ms (9x) / +25 ms; real wav DIO 83 ms (66x) / +111 ms; Harvest 1166 ms (5x) / +62 ms.
   Debug builds are roughly 2-3x slower. Harvest costs about one order of magnitude more than DIO,
   as expected.
 - Tests (`crates/kira-frq-world/tests/estimate.rs`): 5 ms grid + frame count, both estimators
