@@ -13,8 +13,6 @@ UTAU voicebanks come in several recording and oto.ini configuration schemes, eac
 
 KiraOtoToolbox tools are designed to be convention-agnostic at their core. Where presets exist (like `copyOrReplaceByAlias`'s Syo式→十月式 preset), they target specific de facto standards, but the underlying logic treats aliases and filenames as arbitrary strings and numeric parameters as raw values.
 
-For the field-level format reference, see `.claude/skills/oto-file-format.md`.
-
 ---
 
 ## Recording / Oto Schemes
@@ -185,7 +183,7 @@ UTAU finds the matching note name and appends the suffix to the alias being look
 
 ## How This Relates to Our Tools
 
-For the field-level mapping (how tools interact with Left/Consonant/Right/PreUtterance/Overlap/Alias), see the Relevance section in `.claude/skills/oto-file-format.md`. Scheme-specific concerns:
+Scheme-specific concerns:
 
 - **cvvcPartSplit**: Identifies CV vs VC entries by alias format (space-separated vs. plain). Must understand VC alias conventions (`a k`, `i k`) and the begin/end pattern matching for CV identification.
 - **copyOrReplaceByAlias**: Contains a built-in preset for Syo式→十月式 scheme migration (CV aliases expanded for CV-VV splitting). Rules map `ba→ban`, `bang→bao`, `bie→bian`, etc.
