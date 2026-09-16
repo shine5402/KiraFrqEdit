@@ -1,3 +1,6 @@
 # Machine-local files
 *.local.md
 .local/
+
+# Rust
+target/
