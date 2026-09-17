@@ -1,5 +1,5 @@
-//! Structural contract for `kira_frq_core::pmk` — the seven points of #9's
-//! resolution, exercised on synthetic contours, plus the walk's frame lookup.
+//! Structural contract for `kira_frq_core::pmk`: the seven criteria of #9,
+//! boundary and probe cases on synthetic contours, and the write path.
 
 use std::fs;
 use std::path::PathBuf;
@@ -7,6 +7,33 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kira_frq_core::FrequencyTable;
 use kira_frq_core::pmk;
+
+/// A scratch folder that deletes itself.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "kira-frq-pmk-{}-{}-{}",
+            tag,
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+
+    fn join(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
 
 /// A decoded pmk file, independent of the module's own layout knowledge.
 struct Decoded {
@@ -104,7 +131,7 @@ fn sweep_contours(length: usize) -> Vec<FrequencyTable> {
     ]
 }
 
-/// Contract 1: header fields and file size.
+/// Contract 1.
 #[test]
 fn header_and_size_follow_the_format_contract() {
     for length in [0usize, 49, 50, 100, 300, 44_100 + 123, 87_040] {
@@ -160,7 +187,7 @@ fn entry_count_is_zero_only_while_no_mark_fits_below_l() {
     );
 }
 
-/// Contract 3: `pos_end` strictly increases and stays inside `(0, L)`.
+/// Contract 3.
 #[test]
 fn positions_strictly_increase_and_stay_below_l() {
     for length in [50usize, 300, 44_100 + 123, 87_040] {
@@ -179,7 +206,7 @@ fn positions_strictly_increase_and_stay_below_l() {
     }
 }
 
-/// Contract 4: every code is `49` or inside TIPS's detected range.
+/// Contract 4.
 #[test]
 fn codes_are_unvoiced_or_inside_the_tips_range() {
     for length in [50usize, 300, 44_100] {
@@ -221,7 +248,7 @@ fn out_of_range_f0_walks_as_unvoiced() {
     }
 }
 
-/// Contract 5: `pos_end[0] == code[0]`, for an unvoiced and a voiced start.
+/// Contract 5.
 #[test]
 fn first_position_equals_first_code() {
     let unvoiced = decode(&pmk::to_bytes(&contour(5000, |_| 0.0), 5000));
@@ -232,8 +259,7 @@ fn first_position_equals_first_code() {
     assert_eq!(voiced.entries[0], (221, 221));
 }
 
-/// Contract 6: `avg` is the exact f64 mean of the voiced codes, `0.0` when
-/// nothing is voiced.
+/// Contract 6.
 #[test]
 fn avg_is_the_exact_voiced_code_mean() {
     for length in [50usize, 300, 44_100 + 123] {
@@ -267,8 +293,7 @@ fn avg_is_the_exact_voiced_code_mean() {
     );
 }
 
-/// Contract 7: the writer reproduces the #9 walk exactly (deterministic f64),
-/// and the walk stops before `L` with no next step fitting.
+/// Contract 7.
 #[test]
 fn walk_reproduces_the_spec_and_is_deterministic() {
     for length in [50usize, 300, 44_100 + 123, 87_040] {
@@ -285,7 +310,8 @@ fn walk_reproduces_the_spec_and_is_deterministic() {
 }
 
 /// A constant 300 Hz tone has an exactly representable 147-sample period, so
-/// the walk is exactly `147*i` and stops at the last mark below `L`.
+/// the walk is exactly `147*i`; the mark that would land on `L` is not emitted,
+/// but one sample more fits.
 #[test]
 fn constant_tone_walks_one_period_at_a_time() {
     let length = 44_100;
@@ -296,6 +322,10 @@ fn constant_tone_walks_one_period_at_a_time() {
         assert_eq!(code, 147);
     }
     assert_eq!(decoded.avg, 147.0);
+
+    let longer = decode(&pmk::to_bytes(&contour(length + 1, |_| 300.0), length + 1));
+    assert_eq!(longer.entries.len(), 300);
+    assert_eq!(longer.entries.last().unwrap(), &(44_100, 147));
 }
 
 /// A constant 200 Hz tone has period 220.5; the emitted positions alternate
@@ -384,7 +414,7 @@ fn empty_table_walks_as_unvoiced() {
 /// The whole-file walk of silence matches the black-box TIPS probe: 899 marks,
 /// the last at 44,051 (`900*49 == L` is not emitted).
 #[test]
-fn silence_walk_matches_the_engine_probe() {
+fn silence_walk_matches_the_tips_probe() {
     let decoded = decode(&pmk::to_bytes(&contour(44_100, |_| 0.0), 44_100));
     assert_eq!(decoded.entries.len(), 899);
     assert_eq!(decoded.entries.last().unwrap(), &(44_051, 49));
@@ -393,15 +423,10 @@ fn silence_walk_matches_the_engine_probe() {
 /// `write` lands the same bytes on disk as `to_bytes`.
 #[test]
 fn write_lands_the_encoded_bytes() {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let path: PathBuf = std::env::temp_dir().join(format!(
-        "kira-frq-pmk-{}-{}.pmk",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    let scratch = Scratch::new("write");
+    let path = scratch.join("voice_wav.pmk");
     let table = contour(5000, |_| 200.0);
     let expected = pmk::to_bytes(&table, 5000);
     pmk::write(&path, &table, 5000).unwrap();
     assert_eq!(fs::read(&path).unwrap(), expected);
-    let _ = fs::remove_file(path);
 }

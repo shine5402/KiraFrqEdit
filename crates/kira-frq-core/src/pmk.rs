@@ -1,14 +1,14 @@
 //! TIPS `pmk`: f0 as a period-segment walk of codes.
 //!
-//! Format spec: `docs/research/pmk-format.md`. Encoding rules were settled in
-//! #9 and land here (#18).
+//! Format spec: `docs/research/pmk-format.md`; the encoding rules were settled
+//! in #9.
 //!
 //! The writer projects a [`FrequencyTable`] onto the 44.1 kHz sample timeline
 //! as `(pos_end, code)` period segments: `code` is the nearest integer period
 //! in samples, `49` marks unvoiced, and the walk advances by the *unrounded*
 //! period so the rounding never accumulates into drift. f0 outside TIPS's
-//! detected range (codes `50..=513`, ≈86–882 Hz) is stored as unvoiced, since
-//! the writer does not invent a range TIPS does not have.
+//! detected range (86–882 Hz, i.e. codes `50..=513`) is stored as unvoiced,
+//! since the writer does not invent a range TIPS does not have.
 //!
 //! The module is path-agnostic: the pipeline owns sidecar naming
 //! (`<stem>_wav.pmk`, #9) and passes the normalized wav length, because the
@@ -23,16 +23,16 @@ use crate::FrequencyTable;
 /// Header version written by the writer (TIPS 0.19β).
 pub const VERSION: i16 = 19;
 
-/// The `code` that marks an unvoiced segment; its step is exactly 49 samples.
+/// The `code` that marks an unvoiced segment.
 pub const UNVOICED_CODE: i32 = 49;
 
-/// Lowest `code` TIPS's detected range covers (86 Hz).
+/// Lowest voiced `code` (44100/50 = 882 Hz).
 pub const MIN_VOICED_CODE: i32 = 50;
 
-/// Highest `code` TIPS's detected range covers (≈880 Hz).
+/// Highest voiced `code` (44100/513 ≈ 86 Hz).
 pub const MAX_VOICED_CODE: i32 = 513;
 
-/// The sample rate the pmk timeline and its period codes are defined on.
+/// The sample rate the pmk timeline is defined on.
 pub const SAMPLE_RATE: u32 = 44_100;
 
 /// The fixed step an unvoiced segment advances (#9).
@@ -43,17 +43,19 @@ fn voiced_period(f0_hz: f64) -> f64 {
     SAMPLE_RATE as f64 / f0_hz
 }
 
-/// The stored code for one frame's f0: `49` when unvoiced, non-finite, or
-/// outside TIPS's detected period range.
-fn frame_code(f0_hz: f64) -> i32 {
+/// The stored code and walk period for one frame: `49` and a 49-sample step for
+/// a zero, non-finite or out-of-range f0, else the rounded code and the
+/// unrounded period the walk advances by.
+fn frame_step(f0_hz: f64) -> (i32, f64) {
     if !f0_hz.is_finite() || f0_hz <= 0.0 {
-        return UNVOICED_CODE;
+        return (UNVOICED_CODE, UNVOICED_PERIOD);
     }
-    let code = voiced_period(f0_hz).round() as i32;
+    let period = voiced_period(f0_hz);
+    let code = period.round() as i32;
     if (MIN_VOICED_CODE..=MAX_VOICED_CODE).contains(&code) {
-        code
+        (code, period)
     } else {
-        UNVOICED_CODE
+        (UNVOICED_CODE, UNVOICED_PERIOD)
     }
 }
 
@@ -70,23 +72,15 @@ fn frame_at(table: &FrequencyTable, pos: f64) -> f64 {
 }
 
 /// The #9 period walk: advance by the unrounded period, emit `(round(pos),
-/// code)`, stop as soon as the next *emitted* mark would reach `length_samples`
-/// (`round(pos + period) < L`). The emitted mark is rounded, so stopping on the
-/// unrounded `pos + period >= L` alone could store a final `pos_end == L` in
-/// the sub-sample band `[L - 0.5, L)`; the stop here keeps the format contract
-/// `pos_end < L` (and matches TIPS's observed files) instead.
+/// code)`. The emitted mark is rounded, so the stop is too: `round(pos +
+/// period) >= L` aborts even when the unrounded position is still below `L`,
+/// which keeps every `pos_end` below `L` (contract 3 of #9).
 fn walk(table: &FrequencyTable, length_samples: usize) -> Vec<(i32, i32)> {
     let length = length_samples as f64;
     let mut entries = Vec::new();
     let mut pos = 0.0f64;
     loop {
-        let f0_hz = frame_at(table, pos);
-        let code = frame_code(f0_hz);
-        let period = if code == UNVOICED_CODE {
-            UNVOICED_PERIOD
-        } else {
-            voiced_period(f0_hz)
-        };
+        let (code, period) = frame_step(frame_at(table, pos));
         let next = pos + period;
         if next.round() >= length {
             return entries;
@@ -99,9 +93,9 @@ fn walk(table: &FrequencyTable, length_samples: usize) -> Vec<(i32, i32)> {
 /// Encode `table` for a wav of `length_samples` (after normalization) into a
 /// complete pmk file: the 14-byte header plus the #9 period walk.
 ///
-/// `avg` is the entry-weighted f64 mean of the emitted voiced codes, `0.0`
-/// when the file has none (including the header-only file a wav of `<= 49`
-/// samples produces).
+/// `avg` is the f64 mean of the emitted voiced codes (one vote per entry),
+/// `0.0` when the file has none — including the header-only file a wav of
+/// `<= 49` samples produces.
 pub fn to_bytes(table: &FrequencyTable, length_samples: usize) -> Vec<u8> {
     debug_assert_eq!(
         table.sample_rate, SAMPLE_RATE,
@@ -134,7 +128,6 @@ pub fn to_bytes(table: &FrequencyTable, length_samples: usize) -> Vec<u8> {
     out
 }
 
-/// Write [`to_bytes`] to `path`.
 pub fn write(path: &Path, table: &FrequencyTable, length_samples: usize) -> io::Result<()> {
     fs::write(path, to_bytes(table, length_samples))
 }
