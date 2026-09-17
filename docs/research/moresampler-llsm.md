@@ -79,6 +79,10 @@ window is the `.llsm` *version* field, not `modified`. Sub-second wav mtimes are
 hand (0: true, >=1: false)", i.e. `0` is the hand-edit marker; `mrq.c` always stamps `timestamp`
 with `time()` when writing v2, so the caller controls only `modified`.
 
+`.frq` participates only under the opt-in `load-frq` (default `off`): `strict` loads `.frq` pitch
+when `desc.mrq` is unavailable, `on` uses it to correct moresampler's own estimate, and the result
+is written to `desc.mrq` either way.
+
 ## The drift problem: a fresh `.llsm` hides `desc.mrq`
 
 Two decisive experiments:
@@ -153,10 +157,6 @@ entry.
   investigated.
 - mrq file-level versions other than 2 (the "unsupported version, file ignored" path) were not
   exercised end to end.
-- `load-frq` (default `off`) was not exercised black-box here; the tutorial documents it: `strict`
-  loads `.frq` pitch when `desc.mrq` is unavailable, `on` uses `.frq` to correct moresampler's own
-  estimate, and the result is written to `desc.mrq` either way. With the default, `.frq` is not
-  read unless the user opts in.
 
 ## Sources
 
