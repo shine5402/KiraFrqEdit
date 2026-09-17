@@ -12,3 +12,8 @@ path = "src/main.rs"
 [dependencies]
 kira-frqgen.workspace = true
 clap.workspace = true
+ctrlc.workspace = true
+
+[dev-dependencies]
+hound.workspace = true
+kira-frq-core.workspace = true

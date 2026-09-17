@@ -26,6 +26,8 @@ encoding_rs = "0.8"
 
 rayon = "1.12"
 clap = { version = "4", features = ["derive"] }
+# Ctrl-C cancellation for the CLI (#12: exit 130 with a partial summary).
+ctrlc = "3"
 eframe = "0.36"
 
 kira-frq-core = { path = "crates/kira-frq-core" }
