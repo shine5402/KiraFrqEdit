@@ -282,29 +282,7 @@ impl std::fmt::Display for DescError {
 impl std::error::Error for DescError {}
 
 /// [`Desc::read`] can fail either reading or parsing.
-#[derive(Debug)]
-pub enum ReadError {
-    Io(io::Error),
-    Parse(DescError),
-}
-
-impl std::fmt::Display for ReadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ReadError::Io(error) => write!(f, "{error}"),
-            ReadError::Parse(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl std::error::Error for ReadError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            ReadError::Io(error) => Some(error),
-            ReadError::Parse(error) => Some(error),
-        }
-    }
-}
+pub type ReadError = crate::ReadError<DescError>;
 
 /// The state [`open_for_merge`] found the file in.
 #[derive(Debug, Clone, PartialEq, Eq)]

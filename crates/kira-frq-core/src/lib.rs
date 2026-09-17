@@ -5,6 +5,8 @@
 //! takes no position on how f0 was estimated and never links WORLD, so the
 //! later editor and check/repair milestones can use it on its own.
 
+use std::io;
+
 pub mod audio;
 pub mod frq;
 pub mod mrq;
@@ -26,4 +28,30 @@ pub struct FrequencyTable {
     pub amplitude: Option<Vec<f64>>,
     /// Mean of this table's voiced frames (frqeditor 5-8-5); `0.0` when nothing is voiced.
     pub key_hz: f64,
+}
+
+/// A format module's `read` helper can fail either reading or parsing; `E` is
+/// the module's own parse error.
+#[derive(Debug)]
+pub enum ReadError<E> {
+    Io(io::Error),
+    Parse(E),
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for ReadError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadError::Io(error) => write!(f, "{error}"),
+            ReadError::Parse(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for ReadError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ReadError::Io(error) => Some(error),
+            ReadError::Parse(error) => Some(error),
+        }
+    }
 }

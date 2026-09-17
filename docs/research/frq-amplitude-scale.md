@@ -152,8 +152,6 @@ amp[i] = 0                                    if hi <= lo
 - Bounded `0..32768` (a full-scale sine gives ~20,861) — stable across files, monotone with level,
   no per-file normalization, so frqeditor's graph and its histogram-based group detection behave
   the same from bank to bank.
-- On **check/repair of existing tables**, preserve the amplitude array verbatim (per the
-  `frq-format.md` writing rule); only regenerate amplitude together with a full table generation.
 
 If #8 later prefers maximal compatibility with the incumbent UTAU engines over OpenUtau
 compatibility, the swap is the majority corpus convention:

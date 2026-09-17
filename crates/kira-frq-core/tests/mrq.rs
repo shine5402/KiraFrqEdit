@@ -3,41 +3,16 @@
 
 use std::ffi::OsStr;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
 use kira_frq_core::FrequencyTable;
 use kira_frq_core::mrq::{self, Desc, DescError, Entry, MergeState, Sharing};
 
+mod common;
+use common::Scratch;
+
 const TIMESTAMP: i32 = 1_700_000_000;
-
-/// A scratch folder that deletes itself.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(tag: &str) -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "kira-frq-mrq-{}-{}-{}",
-            tag,
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-
-    fn join(&self, name: &str) -> PathBuf {
-        self.0.join(name)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
 
 fn key(name: &str) -> Vec<u16> {
     name.encode_utf16().collect()

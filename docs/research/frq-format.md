@@ -27,21 +27,21 @@ The `.frq` file is the default UTAU frequency table, used by `resampler`, `fresa
   tooling maps `<= 55` to unvoiced when converting from moresampler `mrq`.
 - Amplitude is float64 but its scale is **writer-dependent**: local sample values range 0–7082;
   OpenUtau writes `mean(|x|) * 2^15` (0–32768); PyUtauCli writes 0–1. No resampler is known to
-  consume it for synthesis; treat as display/relative data and preserve verbatim.
+  consume it for synthesis; treat as display/relative data.
 - The manual documents a separate quirk: at f0 <= ~172 Hz one 256-sample window is shorter than the
   pitch period, so consecutive amplitude bars alternate large/small. That is expected, not corruption.
 
 ## Reading robustness checklist
 
 1. Check the magic; reject or convert anything that is not `FREQ0003` (no `FREQ0001/0002` is known).
-2. Prefer `N` from the header, but cross-check against `(filesize - 40) / 16`; if they disagree,
-   prefer the file size (truncated/patched files exist in the wild).
+2. Read `N` from the header and read exactly `N` frames. A file shorter than `40 + 16*N` is
+   truncated and is rejected; bytes past the declared frames (appended data) are ignored. This
+   matches how consumers index (UTAU/OpenUtau read `N` first), and every local file has
+   `N == (filesize - 40) / 16` anyway.
 3. Accept both naming conventions for lookups: `<name>.wav.frq` and `<name>_wav.frq`
    (UTAU/OpenUtau generate `_wav.frq`; local corpus is 100% `_wav.frq`).
 4. Do not assume `hop == 256`; read it (other rates could appear in theory). Time of frame `i` is
    `i * hop / 44100` under UTAU's fixed-rate assumption.
-5. Writing: preserve the 16 reserved bytes and the amplitude array verbatim unless explicitly asked
-   to regenerate them.
 
 ## Where the key frequency lives, and what it means
 
