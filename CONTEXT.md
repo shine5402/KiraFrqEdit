@@ -50,8 +50,8 @@ folder's `desc.mrq`, moresampler's `.llsm`.
 
 ## llsm
 
-moresampler's per-wav DSP model cache, derived from audio and f0; stale whenever f0 changes, and
-regenerated on demand.
+moresampler's per-wav DSP model cache, derived from audio and the f0 moresampler uses (its own
+estimate, corrected by `desc.mrq`); regenerated on demand.
 
 ## Sharing flag
 

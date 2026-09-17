@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 publish = false
 repository = "https://github.com/shine5402/KiraFrqEdit"
@@ -26,6 +26,8 @@ encoding_rs = "0.8"
 
 rayon = "1.12"
 clap = { version = "4", features = ["derive"] }
+# Ctrl-C cancellation for the CLI (#12: exit 130 with a partial summary).
+ctrlc = "3"
 eframe = "0.36"
 
 kira-frq-core = { path = "crates/kira-frq-core" }

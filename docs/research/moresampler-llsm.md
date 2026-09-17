@@ -79,6 +79,10 @@ window is the `.llsm` *version* field, not `modified`. Sub-second wav mtimes are
 hand (0: true, >=1: false)", i.e. `0` is the hand-edit marker; `mrq.c` always stamps `timestamp`
 with `time()` when writing v2, so the caller controls only `modified`.
 
+`.frq` participates only under the opt-in `load-frq` (default `off`): `strict` loads `.frq` pitch
+when `desc.mrq` is unavailable, `on` uses it to correct moresampler's own estimate, and the result
+is written to `desc.mrq` either way (tutorial, 0.7.1 era).
+
 ## The drift problem: a fresh `.llsm` hides `desc.mrq`
 
 Two decisive experiments:
@@ -119,10 +123,12 @@ entry.
 
 ### `.llsm` deletion policy
 
-- **Delete `<wav>.llsm` for every wav whose f0 entry KiraFrqGen writes**, whether or not the wav
-  bytes changed. That is the only reliable invalidation: a fresh `.llsm` ignores `desc.mrq`, and
-  the deletion path works even with `auto-update-llsm-mrq off`. It also unblocks rendering when a
-  newer moresampler left a `>= 600` `.llsm` behind.
+- **Delete `<wav>.llsm` for every wav whose `desc.mrq` f0 entry KiraFrqGen writes** (the `mrq`
+  target), whether or not the wav bytes changed. `frq` writes do not invalidate: moresampler reads
+  `.frq` only under the opt-in `load-frq`, and only while (re)analyzing. Deletion is the only
+  reliable invalidation: a fresh `.llsm` ignores `desc.mrq`, and the deletion path works even with
+  `auto-update-llsm-mrq off`. It also unblocks rendering when a newer moresampler left a `>= 600`
+  `.llsm` behind.
 - **Never "touch" the wav to invalidate.** Making the wav newer than the entry triggers
   re-estimation, which discards the generated f0.
 - **Never delete `desc.mrq`** (that would discard the f0 we just generated). Leave unrelated wavs'
@@ -151,14 +157,15 @@ entry.
   investigated.
 - mrq file-level versions other than 2 (the "unsupported version, file ignored" path) were not
   exercised end to end.
-- f0 precedence between `.frq` and `desc.mrq` under `load-frq on/strict` was not tested (our config
-  had `load-frq off`); relevant because KiraFrqGen also writes `.frq` files.
 
 ## Sources
 
 - Local moresampler 0.8.4 binary in `engines_original` (path in `AGENTS.local.md`; stdout banner
   "Moresampler 0.8.4"); config `...\Resampler\moreconfig.txt` / mirror
   `moreconfig.txt`.
+- The Complete Moresampler Tutorial (Kanru Hua, April 2016, written for 0.7.1) — `load-frq`
+  semantics, and "`desc.mrq` file is accessed only once when Moresampler generates `.llsm` files,
+  since `.llsm` file already completely describes the speech sample".
 - The bundled Moresampler readme (0.8.3; path in `AGENTS.local.md`): 0.6.1 changelog defines
   `auto-update-llsm-mrq` ("If the .wav file is newer than the .llsm file, then reanalyze. If the
   .wav file is also newer than the mrq data entry, then re-estimate pitch before reanalyzing

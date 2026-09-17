@@ -156,7 +156,8 @@ pub struct GenerateOptions {
     pub jobs: usize,
     /// mrq sharing flag (#10): also key entries by the Japanese-side name.
     pub sharing: Option<Sharing>,
-    /// Delete each successfully-written wav's `.llsm` (#4/#10).
+    /// Delete `.llsm` for each wav whose mrq f0 entry was written: frq is not
+    /// moresampler's f0 source, so frq writes leave the caches alone (#4/#10).
     pub delete_llsm: bool,
 }
 
