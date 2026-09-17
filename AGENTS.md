@@ -19,13 +19,15 @@ outputs wrong pitch, glitches and pops.
 
 - Rust workspace: core library crate, CLI binary, egui/eframe GUI.
 - C/C++ only where necessary (WORLD), built from vendored source via `cc`/`cxx`, wrapped in a safe
-  Rust API; keep FFI/`unsafe` confined to one module. Not started yet.
+  Rust API; keep FFI/`unsafe` confined to one module. Landed as `crates/kira-frq-world` (vendored
+  WORLD v1.0.1), verified on MSVC and clang-cl.
 - File formats implemented clean-room from `docs/research/`; no code from proprietary tools.
 
 ## Status
 
-- 2026-09: research phase done, implementation not started. Next: milestone-1 issues
-  (frq parser/writer, editor model, WORLD integration spike).
+- 2026-09: research phase done. WORLD integration landed as `crates/kira-frq-world` (vendored
+  v1.0.1, built via `cc`, green on MSVC and clang-cl). Next: workspace scaffold (`crates/`, CI),
+  then the frq/pmk/mrq writers and the generation pipeline.
 - Research results live in `docs/research/` (README is the index); format specs were verified
   against real files from the local UTAU corpus where possible.
 
