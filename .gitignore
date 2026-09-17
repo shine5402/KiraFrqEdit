@@ -2,5 +2,8 @@
 *.local.md
 .local/
 
+# Agent scratch: worktrees created by opencode
+.opencode/worktrees/
+
 # Rust
 target/
