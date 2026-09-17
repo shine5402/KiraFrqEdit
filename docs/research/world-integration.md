@@ -19,7 +19,7 @@ exercised on this machine; see below). Feeds [#7] (core analysis-to-writer API).
 
 ## Build mechanics (`cc` 1.4.6; MSVC and clang-cl)
 
-`crates/kira-frq-world/build.rs` compiles six translation units into static lib `world`:
+`crates/kirafrq-world-binding/build.rs` compiles six translation units into static lib `world`:
 `dio.cpp`, `harvest.cpp`, `stonemask.cpp`, `common.cpp`, `fft.cpp`, **`matlabfunctions.cpp`**.
 
 - `matlabfunctions.cpp` is required, despite the name: `common.cpp` needs `interp1Q` and
@@ -67,7 +67,7 @@ exercised on this machine; see below). Feeds [#7] (core analysis-to-writer API).
 | `StoneMask` | refinement of either estimator's f0; takes no options |
 
 `KiraFrqGen` defaults applied on top: floor 71 Hz, ceiling 800 Hz, frame period 5 ms
-(`kira_frq_world::F0Options`).
+(`kirafrq_world_binding::F0Options`).
 
 ## Verified behavior and performance
 
@@ -91,10 +91,10 @@ exercised on this machine; see below). Feeds [#7] (core analysis-to-writer API).
   Harvest 441 ms (9x) / +25 ms; real wav DIO 83 ms (66x) / +111 ms; Harvest 1166 ms (5x) / +62 ms.
   Debug builds are roughly 2-3x slower. Harvest costs about one order of magnitude more than DIO,
   as expected.
-- Tests (`crates/kira-frq-world/tests/estimate.rs`): 5 ms grid + frame count, both estimators
+- Tests (`crates/kirafrq-world-binding/tests/estimate.rs`): 5 ms grid + frame count, both estimators
   within 1% of a 220 Hz harmonic tone, floor/ceiling actually moving the voiced set (60 Hz tone
   with 71 vs 50 Hz floor), digital silence unvoiced, input validation. Reproduce:
-  `cargo test --manifest-path crates/kira-frq-world/Cargo.toml`.
+  `cargo test --manifest-path crates/kirafrq-world-binding/Cargo.toml`.
 - Example (`cargo run --release --example world_spike [-- --floor N --ceiling N --seconds N]
   [--wav <path>]`) writes the input wav and per-frame f0 CSVs under `.local/world-spike/`
   (gitignored).
@@ -125,7 +125,7 @@ declares `license = "BSD-3-Clause"`. Upstream README states no patents are claim
 
 ```
 third_party/World/          vendored upstream (LICENSE.txt, VENDORED.md, src/)
-crates/kira-frq-world/
+crates/kirafrq-world-binding/
   build.rs                  cc build of the six TUs plus the shim
   shim/world_shim.{h,cpp}   thin C ABI; option structs stay C++-side
   src/sys.rs                the only module with unsafe
@@ -134,5 +134,5 @@ crates/kira-frq-world/
   tests/estimate.rs
 ```
 
-Crate path is `crates/kira-frq-world` pending the workspace-scaffold ticket; the crate is
+Crate path is `crates/kirafrq-world-binding` pending the workspace-scaffold ticket; the crate is
 standalone (no workspace membership yet) and `Cargo.lock` is committed for reproducibility.

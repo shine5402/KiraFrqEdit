@@ -1,0 +1,9 @@
+[package]
+name = "kirafrq-formats"
+description = "Neutral frequency-table model and UTAU table format IO (frq, pmk, mrq)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+encoding_rs.workspace = true

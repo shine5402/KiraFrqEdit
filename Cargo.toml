@@ -1,11 +1,12 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/kira-frq-core",
-    "crates/kira-frq-world",
-    "crates/kira-frqgen",
-    "crates/kira-frqgen-cli",
-    "crates/kira-frqgen-gui",
+    "crates/kirafrq-formats",
+    "crates/kirafrq-audio",
+    "crates/kirafrq-world-binding",
+    "crates/kirafrqgen-core",
+    "crates/kirafrqgen-cli",
+    "crates/kirafrqgen-gui",
 ]
 
 [workspace.package]
@@ -29,7 +30,11 @@ clap = { version = "4", features = ["derive"] }
 # Ctrl-C cancellation for the CLI (#12: exit 130 with a partial summary).
 ctrlc = "3"
 eframe = "0.36"
+# GUI dependencies (#23): native folder picker and Phosphor icons.
+rfd = "0.17"
+egui-phosphor = "0.14"
 
-kira-frq-core = { path = "crates/kira-frq-core" }
-kira-frq-world = { path = "crates/kira-frq-world" }
-kira-frqgen = { path = "crates/kira-frqgen" }
+kirafrq-formats = { path = "crates/kirafrq-formats" }
+kirafrq-audio = { path = "crates/kirafrq-audio" }
+kirafrq-world-binding = { path = "crates/kirafrq-world-binding" }
+kirafrqgen-core = { path = "crates/kirafrqgen-core" }

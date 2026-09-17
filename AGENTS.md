@@ -19,7 +19,7 @@ outputs wrong pitch, glitches and pops.
 
 - Rust workspace: core library crate, CLI binary, egui/eframe GUI.
 - C/C++ only where necessary (WORLD), built from vendored source via `cc`/`cxx`, wrapped in a safe
-  Rust API; keep FFI/`unsafe` confined to one module. Landed as `crates/kira-frq-world` (vendored
+  Rust API; keep FFI/`unsafe` confined to one module. Landed as `crates/kirafrq-world-binding` (vendored
   WORLD v1.0.1), verified on MSVC and clang-cl.
 - File formats implemented clean-room from `docs/research/`; no code from proprietary tools.
 
@@ -28,17 +28,18 @@ outputs wrong pitch, glitches and pops.
 - 2026-09: research phase done; workspace scaffold landed (#15): five crates under `crates/`,
   WORLD vendored under `third_party/World`, per-platform compiler CI (clang-cl / Apple clang /
   gcc) and tag-triggered CD under
-  `.github/workflows/`. The core formats, WAV normalization, the generation pipeline and the CLI
-  have landed; next are the GUI (#23) and end-to-end validation (#22).
+  `.github/workflows/`. The core formats, WAV normalization, the generation pipeline, the CLI and
+  the GUI (#23) have landed; next is end-to-end validation (#22).
 - Research results live in `docs/research/` (README is the index); format specs were verified
   against real files from the local UTAU corpus where possible.
 
 ## Repo layout
 
-- `crates/` — the Cargo workspace: `kira-frq-core` (neutral `FrequencyTable` + frq/pmk/mrq IO),
-  `kira-frq-world` (vendored WORLD wrapper), `kira-frqgen` (generation pipeline),
-  `kira-frqgen-cli` / `kira-frqgen-gui` (the two binaries).
-- `third_party/World` — vendored WORLD v1.0.1 sources, built by `kira-frq-world`'s `cc` build.
+- `crates/` — the Cargo workspace: `kirafrq-formats` (neutral `FrequencyTable` + frq/pmk/mrq IO),
+  `kirafrq-audio` (WAV decode and mono 44.1 kHz normalization), `kirafrq-world-binding` (vendored
+  WORLD wrapper), `kirafrqgen-core` (generation pipeline), `kirafrqgen-cli` / `kirafrqgen-gui`
+  (the CLI and GUI binaries).
+- `third_party/World` — vendored WORLD v1.0.1 sources, built by `kirafrq-world-binding`'s `cc` build.
 - `.github/workflows/` — CI with one compiler per platform (Windows clang-cl, macOS Apple
   clang, Linux gcc); CD builds binaries on version tags the same way.
 - `docs/research/` — research notes and verified format specs; read before touching formats.
