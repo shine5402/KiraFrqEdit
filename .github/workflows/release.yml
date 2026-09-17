@@ -50,4 +50,4 @@ jobs:
           name: kirafrqgen-${{ matrix.name }}
           path: |
             target/release/kirafrqgen-cli${{ matrix.exe-suffix }}
-            target/release/KiraFrqGen${{ matrix.exe-suffix }}
+            target/release/kirafrqgen-gui${{ matrix.exe-suffix }}

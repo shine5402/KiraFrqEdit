@@ -19,7 +19,7 @@ outputs wrong pitch, glitches and pops.
 
 - Rust workspace: core library crate, CLI binary, egui/eframe GUI.
 - C/C++ only where necessary (WORLD), built from vendored source via `cc`/`cxx`, wrapped in a safe
-  Rust API; keep FFI/`unsafe` confined to one module. Landed as `crates/frq-world` (vendored
+  Rust API; keep FFI/`unsafe` confined to one module. Landed as `crates/kirafrq-world-binding` (vendored
   WORLD v1.0.1), verified on MSVC and clang-cl.
 - File formats implemented clean-room from `docs/research/`; no code from proprietary tools.
 
@@ -35,10 +35,11 @@ outputs wrong pitch, glitches and pops.
 
 ## Repo layout
 
-- `crates/` — the Cargo workspace: `frq-core` (neutral `FrequencyTable` + frq/pmk/mrq IO),
-  `frq-world` (vendored WORLD wrapper), `frqgen` (generation pipeline),
-  `frqgen-cli` / `frqgen-gui` (the two binary crates: `kirafrqgen-cli`, `KiraFrqGen`).
-- `third_party/World` — vendored WORLD v1.0.1 sources, built by `frq-world`'s `cc` build.
+- `crates/` — the Cargo workspace: `kirafrq-formats` (neutral `FrequencyTable` + frq/pmk/mrq IO),
+  `kirafrq-audio` (WAV decode and mono 44.1 kHz normalization), `kirafrq-world-binding` (vendored
+  WORLD wrapper), `kirafrqgen-core` (generation pipeline), `kirafrqgen-cli` / `kirafrqgen-gui`
+  (the CLI and GUI binaries).
+- `third_party/World` — vendored WORLD v1.0.1 sources, built by `kirafrq-world-binding`'s `cc` build.
 - `.github/workflows/` — CI with one compiler per platform (Windows clang-cl, macOS Apple
   clang, Linux gcc); CD builds binaries on version tags the same way.
 - `docs/research/` — research notes and verified format specs; read before touching formats.

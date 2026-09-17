@@ -1,11 +1,12 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/frq-core",
-    "crates/frq-world",
-    "crates/frqgen",
-    "crates/frqgen-cli",
-    "crates/frqgen-gui",
+    "crates/kirafrq-formats",
+    "crates/kirafrq-audio",
+    "crates/kirafrq-world-binding",
+    "crates/kirafrqgen-core",
+    "crates/kirafrqgen-cli",
+    "crates/kirafrqgen-gui",
 ]
 
 [workspace.package]
@@ -33,6 +34,7 @@ eframe = "0.36"
 rfd = "0.17"
 egui-phosphor = "0.14"
 
-frq-core = { path = "crates/frq-core" }
-frq-world = { path = "crates/frq-world" }
-frqgen = { path = "crates/frqgen" }
+kirafrq-formats = { path = "crates/kirafrq-formats" }
+kirafrq-audio = { path = "crates/kirafrq-audio" }
+kirafrq-world-binding = { path = "crates/kirafrq-world-binding" }
+kirafrqgen-core = { path = "crates/kirafrqgen-core" }

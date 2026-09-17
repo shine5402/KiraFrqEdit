@@ -1,0 +1,10 @@
+[package]
+name = "kirafrq-audio"
+description = "WAV decode and normalization (mono 44.1 kHz) for f0 estimation"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+hound.workspace = true
+rubato.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "kirafrqgen-core"
+description = "Bulk frequency-table generation pipeline (f0 estimation to frq/pmk/mrq writers)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+kirafrq-audio.workspace = true
+kirafrq-formats.workspace = true
+kirafrq-world-binding.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+hound.workspace = true

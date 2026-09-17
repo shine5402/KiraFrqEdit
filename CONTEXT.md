@@ -62,5 +62,5 @@ page 932; while it is on, a wav counts as having an mrq table only when both nam
 
 ## KiraFrqGen
 
-The bulk frequency-table generation tool of this project: CLI `kirafrqgen-cli` and GUI `KiraFrqGen`
-over one core.
+The bulk frequency-table generation tool of this project, shipped as the CLI `kirafrqgen-cli` and
+the GUI `kirafrqgen-gui` over one core.
