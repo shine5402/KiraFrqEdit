@@ -81,7 +81,7 @@ with `time()` when writing v2, so the caller controls only `modified`.
 
 `.frq` participates only under the opt-in `load-frq` (default `off`): `strict` loads `.frq` pitch
 when `desc.mrq` is unavailable, `on` uses it to correct moresampler's own estimate, and the result
-is written to `desc.mrq` either way.
+is written to `desc.mrq` either way (tutorial, 0.7.1 era: <https://archive.ph/CTGaA>).
 
 ## The drift problem: a fresh `.llsm` hides `desc.mrq`
 
