@@ -66,14 +66,20 @@ fn run(cli: Cli) -> u8 {
     opts.delete_llsm = if cancel.load(Ordering::Relaxed) {
         true
     } else {
-        let planned = prompt::f0_write_planned(&plan, &targets, cli.overwrite);
-        prompt::resolve_llsm(cli.explicit_llsm(), cli.yes, cli.dry_run, planned, || {
-            if prompt::interactive() {
-                prompt::ask_llsm()
-            } else {
-                true
-            }
-        })
+        let mrq_planned = prompt::mrq_write_planned(&plan, &targets, cli.overwrite);
+        prompt::resolve_llsm(
+            cli.explicit_llsm(),
+            cli.yes,
+            cli.dry_run,
+            mrq_planned,
+            || {
+                if prompt::interactive() {
+                    prompt::ask_llsm()
+                } else {
+                    true
+                }
+            },
+        )
     };
 
     if cli.dry_run {

@@ -244,7 +244,6 @@ fn write_frq(wav: &Path, opts: &GenerateOptions, table: &FrequencyTable, report:
                     .warnings
                     .push(format!("could not delete {}: {error}", alternate.display()));
             }
-            delete_llsm(wav, opts, &mut report.warnings);
         }
         Err(error) => report
             .failures

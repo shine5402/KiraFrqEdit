@@ -46,7 +46,7 @@ pub struct Cli {
     #[arg(short, long)]
     pub verbose: bool,
 
-    /// Delete `.llsm` caches after f0 writes (default).
+    /// Delete `.llsm` caches after mrq writes (default).
     #[arg(long, conflicts_with = "no_delete_llsm")]
     pub delete_llsm: bool,
 

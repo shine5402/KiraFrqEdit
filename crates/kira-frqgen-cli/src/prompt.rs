@@ -1,10 +1,11 @@
 //! The `.llsm` prompt policy (#12): the only interactive question.
 //!
-//! An f0 write (frq or mrq) invalidates moresampler's `.llsm` cache (#4/#10),
-//! so a run asks once upfront — but only when a write is actually planned, so
-//! an all-existing fill-missing run never pauses. An explicit llsm flag or
-//! `-y` answers the question without asking, and outside a terminal the
-//! default (delete) applies.
+//! An mrq write invalidates moresampler's `.llsm` cache (#4/#10; frq is not
+//! moresampler's f0 source, so frq-only runs never touch caches), so a run
+//! asks once upfront — but only when an mrq write is actually planned, so an
+//! all-existing fill-missing run never pauses. An explicit llsm flag or `-y`
+//! answers the question without asking, and outside a terminal the default
+//! (delete) applies.
 
 use std::collections::BTreeSet;
 use std::io::{BufRead, IsTerminal, Write};
@@ -13,30 +14,29 @@ use kira_frqgen::{RunPlan, Target};
 
 use crate::would_write;
 
-/// Whether the run would write an f0-bearing table (`frq` or `mrq`) for any
-/// wav.
-pub fn f0_write_planned(plan: &RunPlan, targets: &BTreeSet<Target>, overwrite: bool) -> bool {
-    plan.files.iter().any(|file| {
-        [Target::Frq, Target::Mrq]
+/// Whether the run would write an mrq f0 entry for any wav.
+pub fn mrq_write_planned(plan: &RunPlan, targets: &BTreeSet<Target>, overwrite: bool) -> bool {
+    targets.contains(&Target::Mrq)
+        && plan
+            .files
             .iter()
-            .any(|target| targets.contains(target) && would_write(file, *target, overwrite))
-    })
+            .any(|file| would_write(file, Target::Mrq, overwrite))
 }
 
 /// Resolve `.llsm` deletion (#12): `--dry-run` writes nothing and never asks;
 /// an explicit flag wins; `-y` takes the default (delete); and otherwise `ask`
-/// decides — only when an f0 write is planned. The caller passes the
+/// decides — only when an mrq write is planned. The caller passes the
 /// interactive question in a terminal and the default (delete) outside one.
 pub fn resolve_llsm(
     explicit: Option<bool>,
     yes: bool,
     dry_run: bool,
-    f0_write_planned: bool,
+    mrq_write_planned: bool,
     ask: impl FnOnce() -> bool,
 ) -> bool {
     match explicit {
         Some(delete) => delete,
-        None if dry_run || yes || !f0_write_planned => true,
+        None if dry_run || yes || !mrq_write_planned => true,
         None => ask(),
     }
 }
@@ -51,7 +51,7 @@ pub fn interactive() -> bool {
 /// input and EOF take the default (yes); an unrecognized answer re-asks.
 pub fn ask_llsm() -> bool {
     loop {
-        eprint!("kira-frqgen: delete cached .llsm files after f0 writes? [Y/n] ");
+        eprint!("kira-frqgen: delete cached .llsm files after mrq writes? [Y/n] ");
         let _ = std::io::stderr().flush();
         let mut answer = String::new();
         match std::io::stdin().lock().read_line(&mut answer) {
@@ -88,26 +88,25 @@ mod tests {
     }
 
     #[test]
-    fn f0_writes_are_frq_and_mrq_only() {
+    fn only_mrq_writes_invalidate_llsm() {
         let all = targets(&[Target::Frq, Target::Pmk, Target::Mrq]);
-        assert!(f0_write_planned(&plan(&[]), &all, false));
-        assert!(f0_write_planned(&plan(&[Target::Pmk]), &all, false));
-        assert!(!f0_write_planned(
-            &plan(&[Target::Frq, Target::Mrq]),
-            &all,
-            false
-        ));
+        assert!(mrq_write_planned(&plan(&[]), &all, false));
+        assert!(mrq_write_planned(&plan(&[Target::Frq]), &all, false));
         assert!(
-            !f0_write_planned(&plan(&[]), &targets(&[Target::Pmk]), false),
+            !mrq_write_planned(&plan(&[]), &targets(&[Target::Frq]), false),
+            "frq is not moresampler's f0 source"
+        );
+        assert!(
+            !mrq_write_planned(&plan(&[]), &targets(&[Target::Pmk]), false),
             "pmk alone never invalidates llsm"
         );
     }
 
     #[test]
-    fn overwrite_plans_writes_for_existing_tables() {
-        let frq = targets(&[Target::Frq]);
-        assert!(!f0_write_planned(&plan(&[Target::Frq]), &frq, false));
-        assert!(f0_write_planned(&plan(&[Target::Frq]), &frq, true));
+    fn existing_mrq_entries_only_plan_writes_with_overwrite() {
+        let all = targets(&[Target::Frq, Target::Mrq]);
+        assert!(!mrq_write_planned(&plan(&[Target::Mrq]), &all, false));
+        assert!(mrq_write_planned(&plan(&[Target::Mrq]), &all, true));
     }
 
     #[test]
@@ -133,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn no_planned_f0_write_never_asks() {
+    fn no_planned_mrq_write_never_asks() {
         let asked = Cell::new(false);
         let delete = resolve_llsm(None, false, false, false, || {
             asked.set(true);

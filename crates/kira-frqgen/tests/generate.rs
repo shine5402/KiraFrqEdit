@@ -480,7 +480,7 @@ fn one_sided_sharing_entries_count_as_absent_and_updates_both() {
 // --- llsm -------------------------------------------------------------------
 
 #[test]
-fn llsm_is_deleted_only_for_successful_f0_writes() {
+fn llsm_is_deleted_only_for_mrq_writes() {
     let scratch = Scratch::new("llsm");
 
     let write = scratch.sub("write");
@@ -511,7 +511,10 @@ fn llsm_is_deleted_only_for_successful_f0_writes() {
     let estimator = FakeEstimator::new(&[220.0]);
     let summary = run(&options(&write, &[Target::Frq]), &estimator);
     assert_eq!(summary.written, 1);
-    assert!(!cache("write", "A2").exists(), "frq write deletes");
+    assert!(
+        cache("write", "A2").exists(),
+        "frq is not moresampler's f0 source, so a write leaves the cache alone"
+    );
 
     let summary = run(&options(&existing, &[Target::Frq]), &estimator);
     assert_eq!(summary.skipped, 1);
@@ -533,7 +536,7 @@ fn llsm_deletion_can_be_disabled() {
     fs::write(scratch.join("A2.wav.llsm"), b"x").unwrap();
 
     let estimator = FakeEstimator::new(&[220.0]);
-    let mut opts = options(&scratch.0, &[Target::Frq]);
+    let mut opts = options(&scratch.0, &[Target::Mrq]);
     opts.delete_llsm = false;
     let summary = run(&opts, &estimator);
 

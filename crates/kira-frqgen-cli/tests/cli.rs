@@ -354,12 +354,31 @@ fn a_failed_file_exits_1_and_never_stops_the_run() {
 // --- llsm -------------------------------------------------------------------
 
 #[test]
-fn llsm_is_deleted_by_default_without_a_prompt_outside_a_tty() {
-    let scratch = Scratch::new("llsm-default");
+fn an_frq_only_run_leaves_llsm_caches_alone() {
+    let scratch = Scratch::new("llsm-frq");
     write_tone(&scratch, "bank/A2.wav");
     scratch.write("bank/A2.wav.llsm", b"cache");
 
-    let run = run_ok(&scratch.0, &["bank"]);
+    let run = run_ok(&scratch.0, &["bank", "--overwrite"]);
+    assert!(run.stderr.contains("written 1"), "{}", run.stderr);
+    assert!(
+        !run.stderr.contains("[Y/n]"),
+        "frq-only never prompts: {}",
+        run.stderr
+    );
+    assert!(
+        scratch.path("bank/A2.wav.llsm").exists(),
+        "frq is not moresampler's f0 source"
+    );
+}
+
+#[test]
+fn mrq_writes_delete_llsm_by_default_without_a_prompt_outside_a_tty() {
+    let scratch = Scratch::new("llsm-mrq");
+    write_tone(&scratch, "bank/A2.wav");
+    scratch.write("bank/A2.wav.llsm", b"cache");
+
+    let run = run_ok(&scratch.0, &["bank", "--format", "mrq"]);
     assert!(run.stderr.contains("written 1"), "{}", run.stderr);
     assert!(
         !run.stderr.contains("[Y/n]"),
@@ -375,7 +394,7 @@ fn no_delete_llsm_keeps_the_cache() {
     write_tone(&scratch, "bank/A2.wav");
     scratch.write("bank/A2.wav.llsm", b"cache");
 
-    let run = run_ok(&scratch.0, &["bank", "--overwrite", "--no-delete-llsm"]);
+    let run = run_ok(&scratch.0, &["bank", "--format", "mrq", "--no-delete-llsm"]);
     assert!(run.stderr.contains("written 1"), "{}", run.stderr);
     assert!(scratch.path("bank/A2.wav.llsm").exists());
 }

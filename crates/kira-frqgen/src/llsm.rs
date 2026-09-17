@@ -3,11 +3,12 @@
 //! moresampler keeps one analysis cache per wav next to it, named by appending
 //! `.llsm` to the full filename (`_かきくけこ.wav` → `_かきくけこ.wav.llsm`). A
 //! cache fresher than the wav silently wins over `desc.mrq`, so after
-//! KiraFrqGen writes new f0 for a wav (any successful `frq` or `mrq` target)
-//! the cache must go, or a render keeps singing the old contour
-//! (`docs/research/moresampler-llsm.md`).
+//! KiraFrqGen writes a new mrq f0 entry for a wav the cache must go, or a
+//! render keeps singing the old contour (`docs/research/moresampler-llsm.md`).
+//! `frq` is not moresampler's f0 source, so an frq write never invalidates the
+//! cache.
 //!
-//! Only wavs whose f0 was actually written are touched — skipped and failed
+//! Only wavs whose entry was actually written are touched — skipped and failed
 //! wavs keep their caches (`no write ⇒ no delete`) — and this is the only cache
 //! invalidation KiraFrqGen performs: never touch the wav, never delete
 //! `desc.mrq` itself.
