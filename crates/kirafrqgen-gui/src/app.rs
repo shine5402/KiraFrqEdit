@@ -1041,7 +1041,7 @@ fn run_row(ui: &mut egui::Ui, row: &Row, root: &Path, time: f64) {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
             match &row.status {
                 Status::Pending => {
-                    progress_pending(ui, rect);
+                    progress_ring(ui, rect);
                 }
                 Status::Running => progress_spinner(ui, rect, time),
                 Status::Written(_) => {
@@ -1122,6 +1122,15 @@ fn dashed_border(painter: &egui::Painter, rect: egui::Rect, stroke: Stroke, dash
     }
 }
 
+/// The empty ring a pending row shows.
+fn progress_ring(ui: &egui::Ui, rect: egui::Rect) {
+    let center = rect.center();
+    let radius = rect.width() * 0.5 - 1.0;
+    let ring = ui.visuals().weak_text_color().gamma_multiply(0.6);
+    ui.painter()
+        .circle_stroke(center, radius, Stroke::new(1.5, ring));
+}
+
 /// 12 o'clock on screen (y down): angle `-PI/2`. Larger angles run clockwise,
 /// so a wedge from `PIE_TOP` with a positive sweep grows clockwise from the top.
 const PIE_TOP: f32 = -std::f32::consts::FRAC_PI_2;
@@ -1178,10 +1187,6 @@ fn progress_pie(ui: &egui::Ui, rect: egui::Rect, start: f32, sweep: f32) {
         mesh.add_triangle(0, index as u32, index as u32 + 1);
     }
     ui.painter().add(Shape::mesh(mesh));
-}
-
-fn progress_pending(ui: &egui::Ui, rect: egui::Rect) {
-    progress_pie(ui, rect, PIE_TOP, 0.0);
 }
 
 fn progress_spinner(ui: &egui::Ui, rect: egui::Rect, time: f64) {
