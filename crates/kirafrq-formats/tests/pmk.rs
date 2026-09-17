@@ -140,7 +140,8 @@ fn header_and_size_follow_the_format_contract() {
             let decoded = decode(&bytes);
             assert_eq!(decoded.version, 19, "version");
             assert!(
-                (0.0..=513.0).contains(&decoded.avg) && decoded.avg.is_finite(),
+                (0.0..=pmk::MAX_VOICED_CODE as f64).contains(&decoded.avg)
+                    && decoded.avg.is_finite(),
                 "avg {0} is not a plausible code mean",
                 decoded.avg
             );
@@ -215,30 +216,36 @@ fn codes_are_unvoiced_or_inside_the_tips_range() {
                 assert!(
                     code == pmk::UNVOICED_CODE
                         || (pmk::MIN_VOICED_CODE..=pmk::MAX_VOICED_CODE).contains(&code),
-                    "code {code} outside 49 or 50..=513"
+                    "code {code} outside 49 or 50..={}",
+                    pmk::MAX_VOICED_CODE
                 );
             }
         }
     }
 }
 
-/// f0 outside TIPS's 50..=513 period range becomes unvoiced with a 49-sample
+/// Assert `decoded` is an unbroken unvoiced walk: 49-sample steps, no voiced
+/// mean.
+fn assert_unvoiced_walk(decoded: &Decoded, label: &str) {
+    assert_eq!(decoded.avg, 0.0, "{label} is entirely unvoiced");
+    for (index, &(pos_end, code)) in decoded.entries.iter().enumerate() {
+        assert_eq!(code, pmk::UNVOICED_CODE, "{label}");
+        assert_eq!(pos_end, 49 * (index as i32 + 1), "{label} walk");
+    }
+}
+
+/// f0 outside TIPS's 50..=511 period range becomes unvoiced with a 49-sample
 /// walk: E2 (82.41 Hz, code 535) and anything above the range.
 #[test]
 fn out_of_range_f0_walks_as_unvoiced() {
     for f0 in [82.41, 70.0, 900.0] {
         let length = 5000;
-        let entries = pmk::to_bytes(&contour(length, |_| f0), length);
-        let decoded = decode(&entries);
+        let decoded = decode(&pmk::to_bytes(&contour(length, |_| f0), length));
         assert!(!decoded.entries.is_empty());
-        assert_eq!(decoded.avg, 0.0, "{f0} Hz is entirely unvoiced");
-        for (index, &(pos_end, code)) in decoded.entries.iter().enumerate() {
-            assert_eq!(code, pmk::UNVOICED_CODE, "{f0} Hz");
-            assert_eq!(pos_end, 49 * (index as i32 + 1), "{f0} Hz walk");
-        }
+        assert_unvoiced_walk(&decoded, &format!("{f0} Hz"));
     }
 
-    for f0 in [882.0, 44100.0 / 513.0] {
+    for f0 in [882.0, 44_100.0 / 511.0] {
         let length = 5000;
         let decoded = decode(&pmk::to_bytes(&contour(length, |_| f0), length));
         assert!(
@@ -246,6 +253,65 @@ fn out_of_range_f0_walks_as_unvoiced() {
             "{f0} Hz must be voiced"
         );
     }
+}
+
+/// The 511/512 voiced cutoff: TIPS 0.19β writes no output wav when any code
+/// reaches 512, so a period that rounds there is unvoiced.
+#[test]
+fn rounded_codes_at_or_above_512_are_unvoiced() {
+    let length = 5000;
+    for period in [200.0, 511.0, 511.4, 511.5, 512.0, 513.0] {
+        let f0 = 44_100.0 / period;
+        let decoded = decode(&pmk::to_bytes(&contour(length, |_| f0), length));
+        assert!(!decoded.entries.is_empty(), "period {period}");
+
+        if period < 511.5 {
+            let first_code = decoded.entries[0].1;
+            assert_eq!(first_code, period.round() as i32, "period {period}");
+            assert!(first_code <= pmk::MAX_VOICED_CODE, "period {period}");
+        } else {
+            assert_unvoiced_walk(&decoded, &format!("period {period}"));
+        }
+        assert!(
+            decoded
+                .entries
+                .iter()
+                .all(|&(_, code)| code <= pmk::MAX_VOICED_CODE),
+            "period {period}: no voiced code may reach the TIPS ceiling"
+        );
+    }
+}
+
+/// The reported failure shape: a contour that is voiced but dips below the
+/// floor for a single frame must unvoice that frame only, leaving the rest
+/// voiced.
+#[test]
+fn a_single_sub_floor_frame_unvoices_within_a_voiced_contour() {
+    let length = 5000;
+    let table = contour(length, |i| if i == 5 { 44_100.0 / 512.5 } else { 200.0 });
+    let decoded = decode(&pmk::to_bytes(&table, length));
+
+    assert!(
+        decoded
+            .entries
+            .iter()
+            .any(|&(_, code)| code == pmk::UNVOICED_CODE),
+        "the sub-floor frame must be unvoiced"
+    );
+    assert!(
+        decoded
+            .entries
+            .iter()
+            .any(|&(_, code)| code != pmk::UNVOICED_CODE),
+        "the surrounding voiced frames must stay voiced"
+    );
+    assert!(
+        decoded
+            .entries
+            .iter()
+            .all(|&(_, code)| code <= pmk::MAX_VOICED_CODE),
+        "no emitted code may reach the TIPS ceiling"
+    );
 }
 
 /// Contract 5.
