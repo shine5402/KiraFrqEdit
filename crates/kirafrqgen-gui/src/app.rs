@@ -351,7 +351,11 @@ impl KiraFrqGenApp {
                     .run_state()
                     .is_some_and(|state| state.cancel_requested());
                 ui.scope(|ui| {
-                    let red = Color32::from_rgb(196, 72, 72);
+                    let red = if ui.visuals().dark_mode {
+                        Color32::from_rgb(127, 29, 29)
+                    } else {
+                        Color32::from_rgb(254, 202, 202)
+                    };
                     let widgets = &mut ui.visuals_mut().widgets;
                     widgets.hovered.weak_bg_fill = red;
                     widgets.hovered.bg_fill = red;
