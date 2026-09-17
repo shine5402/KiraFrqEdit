@@ -12,9 +12,7 @@
 //! ignored. The 16 reserved bytes are ignored too (real files store a sample
 //! rate or a SpeedWagon marker there).
 //!
-//! Writing zeroes those reserved bytes; preserving an existing file's reserved
-//! bytes byte-for-byte is beyond the neutral model and belongs to the
-//! check/repair milestone. The amplitude comes from
+//! Writing zeroes those reserved bytes. The amplitude comes from
 //! [`FrequencyTable::amplitude`] (the pipeline computes it per #8); frames it
 //! does not cover are written as `0.0`.
 
