@@ -307,22 +307,22 @@ impl KiraFrqGenApp {
                     "moresampler reads its .llsm cache instead of a changed desc.mrq (#4); \
                  deleted only for wavs whose mrq entry is written",
                 );
-            let sharing_hint = if self.targets.mrq {
-                "Also key each mrq entry by its Japanese-code-page spelling, so the tables \
-                 keep working when the bank is shared with a Japanese-locale moresampler (#10)"
+            let codepage_hint = if self.targets.mrq {
+                "Also keys each mrq entry by the filename's Japanese-code-page spelling, so the \
+                 generated tables keep working on Japanese-locale machines"
             } else {
-                "Only mrq entries are keyed; check mrq to use this"
+                "Applies to mrq entries only; select mrq to use this"
             };
             if ui
                 .add_enabled(
                     self.targets.mrq,
-                    egui::Checkbox::new(&mut self.japanese_codepage, "Sharing flag"),
+                    egui::Checkbox::new(&mut self.japanese_codepage, "Ensure Japanese codepage"),
                 )
-                .on_hover_text(sharing_hint)
+                .on_hover_text(codepage_hint)
                 .changed()
                 && self.tree.is_some()
             {
-                // The flag changes which mrq entries count as existing, so
+                // This option changes which mrq entries count as existing, so
                 // the tree's labels and default selection need a re-plan.
                 self.rescan();
             }
