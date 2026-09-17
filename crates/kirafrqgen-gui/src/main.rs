@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 //! KiraFrqGen: the egui front end over `kirafrqgen-core` (#23, shell B from #13).
 
 mod app;
