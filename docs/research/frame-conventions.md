@@ -72,11 +72,17 @@ most of it is unvoiced 49s).
   are voiced-start files where the first mark is the first detected pitch mark (69…357), as TIPS
   also does black-box (first mark 287 on a tone that starts at 0).
 - End: `pos_end` is always `< L` (1,230/1,231; the single exception pairs with a
-  shortened stale wav, and its `.frq` is stale too). Only 2 files were left with room for another
+  shortened stale wav, and its `.frq` is stale too). Rule: append marks while the *rounded* mark is
+  below `L` — a mark that would round to `L` is suppressed, not clamped, so the final gap is
+  `1…49` samples. Only 2 files were left with room for another
   whole period (both edge/stale cases: one with 2,555 samples to spare and
-  one off by 15). Rule: append marks while `next_pos_end < L`.
+  one off by 15).
   - Black-box silence (`L=44,100`, step 49): entries end at 44,051 = 899×49; 900×49 = L exactly and
     is not emitted. `L=100` → 2 entries, `L=300` → 6 entries.
+  - Black-box fractional phase (300 Hz tone, fixed silence tail, `L` stepped one sample over 120
+    values): the final gap cycles 1…49 and never reaches 0, and a gap of 49 occurs (a clamp to
+    `L-1` would cap the gap at 48); the corpus agrees — 0/1,231 files store `pos_end == L`, and
+    gap-1 closers occur at the ~1/49 rate of a uniform gap rather than the ~50 % a clamp would give.
   - A wav that ends voiced stops at the last analysed window, a few hundred samples early
     (pure tone: `L=82,500` → last 82,292; `L=88,200` → last 88,067).
 
@@ -195,6 +201,8 @@ Scripts (worktree `.local/`, gitignored; corpus read-only):
 
 - `frame_scan.py`, `frq_grid.py`, `frq_fingerprint.py` — `frq` pairing/count matrix/per-bank.
 - `pmk_rules.py`, `pmk_probe.py` — `pmk` end rule, first entry, 2.36 M transition statistics.
+- `pmk_end_scan.py`, `pmk_end_probe.py` — final `pos_end` gap: corpus scan and the `TIPS.exe`
+  length sweep behind the end rule above.
 - `mrq_pair2.py` — `mrq` pairing incl. mojibake repair, `nf0` formula counts.
 - `engine_probe.py`, `probe_analyze.py`, `engine_matrix.py`, `boundary_probe.py`,
   `align_probe.py`, `pmk_sweep.py`, `pmk_pitch_probe.py`, `final_checks.py` — synthetic wavs and
