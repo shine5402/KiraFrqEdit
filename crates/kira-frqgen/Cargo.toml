@@ -9,3 +9,6 @@ publish.workspace = true
 kira-frq-core.workspace = true
 kira-frq-world.workspace = true
 rayon.workspace = true
+
+[dev-dependencies]
+hound.workspace = true
