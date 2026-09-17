@@ -1093,6 +1093,55 @@ fn file_progress_without_stonemask_gives_estimate_the_whole_analysis() {
 }
 
 #[test]
+fn file_progress_splits_the_write_share_across_targets() {
+    let scratch = Scratch::new("file-progress-units");
+    let wav = write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);
+    let opts = options(&scratch.0, &[Target::Frq, Target::Pmk]);
+    let progress = ProgressTape::default();
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+    generate(&opts, &ScriptedEstimator, &progress, &cancel).unwrap();
+
+    let events = progress.events.lock().unwrap();
+    let fractions: Vec<u64> = events
+        .iter()
+        .filter(|(path, _, _)| *path == wav)
+        .map(|(_, done, _)| *done)
+        .collect();
+    // StoneMask is on by default: analysis to 900, then one 50-share per
+    // written target.
+    assert_eq!(
+        fractions,
+        [112, 225, 337, 450, 562, 675, 787, 900, 950, 1000]
+    );
+}
+
+#[test]
+fn file_progress_credits_a_deferred_mrq_share_at_the_folder_merge() {
+    let scratch = Scratch::new("file-progress-mrq");
+    let wav = write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);
+    let opts = options(&scratch.0, &[Target::Frq, Target::Mrq]);
+    let progress = ProgressTape::default();
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+    generate(&opts, &ScriptedEstimator, &progress, &cancel).unwrap();
+
+    let events = progress.events.lock().unwrap();
+    let fractions: Vec<u64> = events
+        .iter()
+        .filter(|(path, _, _)| *path == wav)
+        .map(|(_, done, _)| *done)
+        .collect();
+    // The frq share lands in phase A; the mrq share waits for the merge.
+    assert_eq!(
+        fractions,
+        [112, 225, 337, 450, 562, 675, 787, 900, 950, 1000]
+    );
+    assert!(
+        events.iter().any(|(_, done, _)| *done == 1000),
+        "the merge completes the file"
+    );
+}
+
+#[test]
 fn skipped_wavs_emit_no_progress_events() {
     let scratch = Scratch::new("progress-skip");
     write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);

@@ -1208,17 +1208,16 @@ fn progress_pie(ui: &egui::Ui, rect: egui::Rect, start: f32, sweep: f32) {
         return;
     }
     let wedge = ui.visuals().selection.bg_fill;
-    // A triangle fan, not a convex polygon: sweeps past half the circle are
-    // concave, and a convex fill would cover the reflex notch.
+    // A filled closed path, not a mesh and not a convex polygon: the
+    // tessellator triangulates concave sweeps correctly *and* feathers the
+    // edge, while a raw mesh reaches the screen aliased.
     let points = wedge_points(center, radius, start, sweep, 24);
-    let mut mesh = egui::Mesh::default();
-    for point in &points {
-        mesh.colored_vertex(*point, wedge);
-    }
-    for index in 1..points.len() - 1 {
-        mesh.add_triangle(0, index as u32, index as u32 + 1);
-    }
-    ui.painter().add(Shape::mesh(mesh));
+    ui.painter().add(Shape::Path(egui::epaint::PathShape {
+        points,
+        closed: true,
+        fill: wedge,
+        stroke: Default::default(),
+    }));
 }
 
 #[cfg(test)]

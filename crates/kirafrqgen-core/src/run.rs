@@ -281,17 +281,25 @@ fn process_wav(
     }
 
     let mut mrq_work = None;
+    // The write phase owns the last 10% of the file, one share per selected
+    // target; a share credits when that target's outcome is final (written,
+    // skipped, or staged for the folder merge). The loop below is sequential,
+    // so each credit moves the indicator.
+    let total_units = opts.targets.len() as u64;
+    let mut completed_units = 0u64;
     for target in &opts.targets {
         match target {
             Target::Frq => write_frq(wav, opts, &table, &mut report),
             Target::Pmk => write_pmk(wav, opts, &table, decoded.samples.len(), &mut report),
             Target::Mrq => mrq_work = write_mrq(wav, opts, &table, descs, &mut report),
         }
+        if *target != Target::Mrq || mrq_work.is_none() {
+            completed_units += 1;
+            progress.file_progress(wav, 900 + completed_units * 100 / total_units, 1000);
+        }
     }
 
     if mrq_work.is_none() {
-        // The analysis composed the first 90%; the writes own the last 10%.
-        progress.file_progress(wav, 1000, 1000);
         progress.file_finished(&report);
     }
     WavResult {
