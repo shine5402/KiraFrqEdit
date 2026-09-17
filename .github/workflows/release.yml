@@ -49,5 +49,5 @@ jobs:
         with:
           name: kirafrqgen-${{ matrix.name }}
           path: |
-            target/release/kira-frqgen${{ matrix.exe-suffix }}
+            target/release/kirafrqgen-cli${{ matrix.exe-suffix }}
             target/release/KiraFrqGen${{ matrix.exe-suffix }}

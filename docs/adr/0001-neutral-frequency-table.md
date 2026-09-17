@@ -2,7 +2,7 @@
 
 Status: accepted
 
-All frequency-table formats share one in-memory model — `kira_frq_core::FrequencyTable`
+All frequency-table formats share one in-memory model — `frq_core::FrequencyTable`
 (sample rate, hop, f0 per frame, optional amplitude, key frequency) — and format modules read
 and write it. Generation builds the neutral table directly from the estimator's track;
 conversions between formats go through it and are documented lossy; the future editor and
@@ -23,7 +23,7 @@ preserve stored `pos_end` values).
 
 - Conversion cannot be byte-exact where formats quantise differently (pmk period codes, mrq
   `float32` f0, frq amplitude); this is expected and matches frqeditor's documented behaviour.
-- `kira-frq-core` takes no position on how f0 was estimated, so it stays free of the
+- `frq-core` takes no position on how f0 was estimated, so it stays free of the
   WORLD/FFI dependency; the editor milestone does not link WORLD.
 - The table's `hop_samples` is the source of truth for the estimator grid too: the pipeline
   derives WORLD's `frame_period` from it (≈ 5.805 ms at 44.1 kHz/256) instead of using the 5 ms

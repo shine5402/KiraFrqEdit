@@ -1,0 +1,14 @@
+[package]
+name = "frqgen"
+description = "Bulk frequency-table generation pipeline (f0 estimation to frq/pmk/mrq writers)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+frq-core.workspace = true
+frq-world.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+hound.workspace = true

@@ -1301,6 +1301,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "frq-core"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "hound",
+ "rubato",
+]
+
+[[package]]
+name = "frq-world"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "hound",
+]
+
+[[package]]
+name = "frqgen"
+version = "0.1.0"
+dependencies = [
+ "frq-core",
+ "frq-world",
+ "hound",
+ "rayon",
+]
+
+[[package]]
+name = "frqgen-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "ctrlc",
+ "frq-core",
+ "frqgen",
+ "hound",
+]
+
+[[package]]
+name = "frqgen-gui"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui-phosphor",
+ "frqgen",
+ "rfd",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1822,54 +1870,6 @@ name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
-
-[[package]]
-name = "kira-frq-core"
-version = "0.1.0"
-dependencies = [
- "encoding_rs",
- "hound",
- "rubato",
-]
-
-[[package]]
-name = "kira-frq-world"
-version = "0.1.0"
-dependencies = [
- "cc",
- "hound",
-]
-
-[[package]]
-name = "kira-frqgen"
-version = "0.1.0"
-dependencies = [
- "hound",
- "kira-frq-core",
- "kira-frq-world",
- "rayon",
-]
-
-[[package]]
-name = "kira-frqgen-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "ctrlc",
- "hound",
- "kira-frq-core",
- "kira-frqgen",
-]
-
-[[package]]
-name = "kira-frqgen-gui"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui-phosphor",
- "kira-frqgen",
- "rfd",
-]
 
 [[package]]
 name = "kurbo"

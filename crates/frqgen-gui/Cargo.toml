@@ -1,0 +1,16 @@
+[package]
+name = "frqgen-gui"
+description = "KiraFrqGen egui interface"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "KiraFrqGen"
+path = "src/main.rs"
+
+[dependencies]
+frqgen.workspace = true
+eframe.workspace = true
+rfd.workspace = true
+egui-phosphor.workspace = true
