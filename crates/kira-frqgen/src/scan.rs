@@ -3,8 +3,10 @@
 //! The root is either a single `.wav` (taken as given) or a folder, walked
 //! recursively: `wav` matches case-insensitively, macOS AppleDouble sidecars
 //! (`._*`) are skipped — a bank copied from macOS otherwise doubles its wav
-//! count — and directory symlinks are not followed. The result is sorted by
-//! path, so a run's order is deterministic.
+//! count — and symlinks and junctions are followed, so a bank may link folders
+//! or files into place. A link back into a directory on the current walk is
+//! cut, so a loop cannot recurse forever; a dangling link is not a wav. The
+//! result is sorted by path, so a run's order is deterministic.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -28,8 +30,7 @@ fn has_wav_extension(path: &Path) -> bool {
 /// Fatal when the root cannot be read, is neither a wav nor a folder, or when
 /// a folder holds no wavs at all.
 pub(crate) fn scan_wavs(root: &Path) -> Result<Vec<PathBuf>, GeneratorError> {
-    // `metadata` follows symlinks, so a symlinked root works; nested
-    // directory symlinks are not followed (see `collect`).
+    // `metadata` follows symlinks, so a symlinked root works.
     let metadata = fs::metadata(root).map_err(|error| scan_error(root, error))?;
 
     if metadata.is_file() {
@@ -56,7 +57,8 @@ pub(crate) fn scan_wavs(root: &Path) -> Result<Vec<PathBuf>, GeneratorError> {
     }
 
     let mut wavs = Vec::new();
-    collect(root, &mut wavs)?;
+    let mut chain = Vec::new();
+    collect(root, &mut wavs, &mut chain)?;
     wavs.sort();
     if wavs.is_empty() {
         return Err(GeneratorError::NoWavs {
@@ -66,25 +68,51 @@ pub(crate) fn scan_wavs(root: &Path) -> Result<Vec<PathBuf>, GeneratorError> {
     Ok(wavs)
 }
 
-/// Walk `dir` for wavs. `DirEntry::file_type` does not resolve symlinks, so a
-/// symlinked directory reports as a symlink and is skipped, never recursed.
-fn collect(dir: &Path, wavs: &mut Vec<PathBuf>) -> Result<(), GeneratorError> {
-    let entries = fs::read_dir(dir).map_err(|error| scan_error(dir, error))?;
+/// Walk `dir` for wavs. Entries are visited in name order and `chain` holds the
+/// canonical path of every directory on the current walk, so a link back into
+/// an ancestor is cut rather than followed; a link into a directory elsewhere
+/// in the tree is followed like a real entry.
+fn collect(
+    dir: &Path,
+    wavs: &mut Vec<PathBuf>,
+    chain: &mut Vec<PathBuf>,
+) -> Result<(), GeneratorError> {
+    let canonical = fs::canonicalize(dir).map_err(|error| scan_error(dir, error))?;
+    if chain.contains(&canonical) {
+        return Ok(());
+    }
+    chain.push(canonical);
+
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|error| scan_error(dir, error))? {
+        entries.push(entry.map_err(|error| scan_error(dir, error))?);
+    }
+    entries.sort_by_key(fs::DirEntry::file_name);
+
     for entry in entries {
-        let entry = entry.map_err(|error| scan_error(dir, error))?;
         if is_appledouble(&entry.file_name()) {
             continue;
         }
         let path = entry.path();
-        let file_type = entry
+        let entry_type = entry
             .file_type()
             .map_err(|error| scan_error(&path, error))?;
-        if file_type.is_dir() {
-            collect(&path, wavs)?;
-        } else if file_type.is_file() && has_wav_extension(&path) {
+        let (is_dir, is_file) = if entry_type.is_symlink() {
+            match fs::metadata(&path) {
+                Ok(target) => (target.is_dir(), target.is_file()),
+                Err(_) => continue, // dangling link
+            }
+        } else {
+            (entry_type.is_dir(), entry_type.is_file())
+        };
+        if is_dir {
+            collect(&path, wavs, chain)?;
+        } else if is_file && has_wav_extension(&path) {
             wavs.push(path);
         }
     }
+
+    chain.pop();
     Ok(())
 }
 
@@ -114,8 +142,14 @@ mod tests {
             Self(path)
         }
 
-        fn join(&self, name: &str) -> PathBuf {
-            let path = self.0.join(name);
+        /// A path inside the scratch folder; nothing is created.
+        fn path(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+
+        /// Write a placeholder file, creating parent folders.
+        fn file(&self, name: &str) -> PathBuf {
+            let path = self.path(name);
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).unwrap();
             }
@@ -144,12 +178,12 @@ mod tests {
     #[test]
     fn finds_nested_wavs_sorted_and_ignores_other_files() {
         let scratch = Scratch::new("nested");
-        scratch.join("B2.wav");
-        scratch.join("A2/A2.wav");
-        scratch.join("A2/A3.WAV");
-        scratch.join("A2/notes.txt");
-        scratch.join("A2/A3.wave");
-        scratch.join("A2/._A4.wav");
+        scratch.file("B2.wav");
+        scratch.file("A2/A2.wav");
+        scratch.file("A2/A3.WAV");
+        scratch.file("A2/notes.txt");
+        scratch.file("A2/A3.wave");
+        scratch.file("A2/._A4.wav");
 
         let wavs = scan_wavs(&scratch.0).unwrap();
         assert_eq!(
@@ -162,8 +196,8 @@ mod tests {
     #[test]
     fn appledouble_directories_are_skipped_too() {
         let scratch = Scratch::new("appledouble");
-        scratch.join("._junk/inside.wav");
-        scratch.join("real.wav");
+        scratch.file("._junk/inside.wav");
+        scratch.file("real.wav");
 
         let wavs = scan_wavs(&scratch.0).unwrap();
         assert_eq!(names(&wavs, &scratch), ["real.wav"]);
@@ -172,7 +206,7 @@ mod tests {
     #[test]
     fn accepts_a_single_wav_root_case_insensitively() {
         let scratch = Scratch::new("single");
-        let wav = scratch.join("A2.WAV");
+        let wav = scratch.file("A2.WAV");
 
         assert_eq!(scan_wavs(&wav).unwrap(), [wav]);
     }
@@ -180,7 +214,7 @@ mod tests {
     #[test]
     fn rejects_an_appledouble_file_root() {
         let scratch = Scratch::new("appledouble-root");
-        let file = scratch.join("._A2.wav");
+        let file = scratch.file("._A2.wav");
 
         assert!(matches!(scan_wavs(&file), Err(GeneratorError::Config(_))));
     }
@@ -188,7 +222,7 @@ mod tests {
     #[test]
     fn rejects_a_non_wav_file_root() {
         let scratch = Scratch::new("nonwav");
-        let file = scratch.join("notes.txt");
+        let file = scratch.file("notes.txt");
 
         assert!(matches!(scan_wavs(&file), Err(GeneratorError::Config(_))));
     }
@@ -201,8 +235,7 @@ mod tests {
             Err(GeneratorError::NoWavs { .. })
         ));
 
-        let missing = scratch.join("missing");
-        fs::remove_file(&missing).unwrap();
+        let missing = scratch.path("missing");
         assert!(matches!(
             scan_wavs(&missing),
             Err(GeneratorError::Scan { .. })
@@ -211,12 +244,40 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn directory_symlinks_are_not_followed() {
+    fn symlinks_to_folders_and_files_are_followed() {
         let scratch = Scratch::new("symlink");
-        scratch.join("real/inside.wav");
-        std::os::unix::fs::symlink(scratch.join("real"), scratch.join("linked")).unwrap();
+        scratch.file("real/inside.wav");
+        std::os::unix::fs::symlink(scratch.path("real"), scratch.path("linked")).unwrap();
+        std::os::unix::fs::symlink(scratch.path("real/inside.wav"), scratch.path("alias.wav"))
+            .unwrap();
+
+        let wavs = scan_wavs(&scratch.0).unwrap();
+        assert_eq!(
+            names(&wavs, &scratch),
+            ["alias.wav", "linked/inside.wav", "real/inside.wav"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_cycles_terminate() {
+        let scratch = Scratch::new("symlink-loop");
+        scratch.file("real/inside.wav");
+        std::os::unix::fs::symlink(&scratch.0, scratch.path("real/loop")).unwrap();
+        std::os::unix::fs::symlink(scratch.path("real"), scratch.path("real/self")).unwrap();
 
         let wavs = scan_wavs(&scratch.0).unwrap();
         assert_eq!(names(&wavs, &scratch), ["real/inside.wav"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlinks_are_skipped() {
+        let scratch = Scratch::new("dangling");
+        std::os::unix::fs::symlink(scratch.path("missing"), scratch.path("gone.wav")).unwrap();
+        scratch.file("real.wav");
+
+        let wavs = scan_wavs(&scratch.0).unwrap();
+        assert_eq!(names(&wavs, &scratch), ["real.wav"]);
     }
 }
