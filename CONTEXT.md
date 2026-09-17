@@ -9,11 +9,24 @@ Per-wav cache of pitch information that UTAU resamplers consume so they do not r
 Formats: `frq` (UTAU classic: f0 + amplitude + key), `pmk` (TIPS: f0 as period codes), `mrq`
 (moresampler: f0 only, stored as one `desc.mrq` per folder). _Avoid_: "pitch file".
 
+## Amplitude (volume)
+
+The per-frame loudness value stored alongside f0 in `frq`; a human-facing reference, drawn next to
+the f0 curve by UTAU's and frqeditor's table editors, used to judge whether f0 detection is sane
+where it should or should not be. Not synthesis input; scale is writer-dependent. _Avoid_: bare
+"volume" when the stored number is meant.
+
 ## Key frequency
 
 The recording pitch of a wav, in Hz, stored in most table formats and used by UTAU's `mod`
 processing. Not the same as a note's pitch. frqeditor sets it to the mean of voiced frames.
 _Avoid_: calling it "average f0" in mixed company.
+
+## Voiced frame
+
+A frame that carries pitch: `f0 > 0.0` in `frq`/`mrq`; `pmk` spells it `code != 49`. Key frequency
+and `pmk`'s average code are means over voiced frames/entries. _Avoid_: "sounded frame" — unvoiced
+consonants are loud but pitchless.
 
 ## f0 estimator
 
