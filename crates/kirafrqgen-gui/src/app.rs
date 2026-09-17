@@ -1041,7 +1041,7 @@ fn run_row(ui: &mut egui::Ui, row: &Row, root: &Path, time: f64) {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
             match &row.status {
                 Status::Pending => {
-                    progress_ring(ui, rect);
+                    progress_pending(ui, rect);
                 }
                 Status::Running => progress_spinner(ui, rect, time),
                 Status::Written(_) => {
@@ -1122,36 +1122,120 @@ fn dashed_border(painter: &egui::Painter, rect: egui::Rect, stroke: Stroke, dash
     }
 }
 
-/// The empty ring a pending row shows; returns its centre and radius for the
-/// spinner to draw over.
-fn progress_ring(ui: &egui::Ui, rect: egui::Rect) -> (egui::Pos2, f32) {
+/// 12 o'clock on screen (y down): angle `-PI/2`. Larger angles run clockwise,
+/// so a wedge from `PIE_TOP` with a positive sweep grows clockwise from the top.
+const PIE_TOP: f32 = -std::f32::consts::FRAC_PI_2;
+
+/// Fixed wedge sweep for a running row (#34).
+const SPINNER_SWEEP: f32 = 1.7;
+
+/// The faint filled disc behind the wedge.
+fn progress_disc(ui: &egui::Ui, rect: egui::Rect) -> (egui::Pos2, f32) {
     let center = rect.center();
-    let radius = rect.width() * 0.5 - 1.0;
-    let ring = ui.visuals().weak_text_color().gamma_multiply(0.6);
-    ui.painter()
-        .circle_stroke(center, radius, Stroke::new(1.5, ring));
+    let radius = rect.width() * 0.5;
+    let track = ui.visuals().weak_text_color().gamma_multiply(0.15);
+    ui.painter().circle_filled(center, radius, track);
     (center, radius)
 }
 
+/// Triangle fan for a wedge sweeping `sweep` radians clockwise from `start` on
+/// screen (y down): the centre followed by one rim point per segment step.
+fn wedge_points(
+    center: egui::Pos2,
+    radius: f32,
+    start: f32,
+    sweep: f32,
+    segments: u32,
+) -> Vec<egui::Pos2> {
+    let mut points = vec![center];
+    if sweep <= 0.0 {
+        return points;
+    }
+    let segments = segments.max(1);
+    for index in 0..=segments {
+        let angle = start + sweep * (index as f32 / segments as f32);
+        points.push(center + Vec2::new(angle.cos(), angle.sin()) * radius);
+    }
+    points
+}
+
+/// Strokeless pie: faint filled disc plus a filled accent wedge sweeping
+/// clockwise from 12 o'clock. A zero sweep leaves the disc alone.
+fn progress_pie(ui: &egui::Ui, rect: egui::Rect, start: f32, sweep: f32) {
+    let (center, radius) = progress_disc(ui, rect);
+    if sweep <= 0.0 {
+        return;
+    }
+    let wedge = ui.visuals().selection.bg_fill;
+    // A triangle fan, not a convex polygon: sweeps past half the circle are
+    // concave, and a convex fill would cover the reflex notch.
+    let points = wedge_points(center, radius, start, sweep, 24);
+    let mut mesh = egui::Mesh::default();
+    for point in &points {
+        mesh.colored_vertex(*point, wedge);
+    }
+    for index in 1..points.len() - 1 {
+        mesh.add_triangle(0, index as u32, index as u32 + 1);
+    }
+    ui.painter().add(Shape::mesh(mesh));
+}
+
+fn progress_pending(ui: &egui::Ui, rect: egui::Rect) {
+    progress_pie(ui, rect, PIE_TOP, 0.0);
+}
+
 fn progress_spinner(ui: &egui::Ui, rect: egui::Rect, time: f64) {
-    let (center, radius) = progress_ring(ui, rect);
-    let fill = ui.visuals().selection.bg_fill;
-    let painter = ui.painter();
-    let start = (time * 2.4).rem_euclid(std::f64::consts::TAU) as f32;
-    let sweep = 1.7_f32;
-    let segments = 10;
-    let points: Vec<egui::Pos2> = (0..=segments)
-        .map(|index| {
-            let angle = start + sweep * (index as f32 / segments as f32);
-            center + Vec2::new(angle.cos(), angle.sin()) * (radius - 1.0)
-        })
-        .collect();
-    painter.add(Shape::line(points, Stroke::new(1.8, fill)));
+    let start = PIE_TOP + (time * 2.4).rem_euclid(std::f64::consts::TAU) as f32;
+    progress_pie(ui, rect, start, SPINNER_SWEEP);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wedge_starts_at_twelve_oclock() {
+        let center = egui::Pos2::new(100.0, 100.0);
+        let points = wedge_points(center, 7.0, PIE_TOP, 1.0, 8);
+        let first_rim = points[1];
+        assert!((first_rim.x - center.x).abs() < 1e-4);
+        assert!((first_rim.y - (center.y - 7.0)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_wedge_grows_clockwise_from_the_top() {
+        let center = egui::Pos2::new(100.0, 100.0);
+        let points = wedge_points(center, 7.0, PIE_TOP, 1.0, 8);
+        // The middle of a small clockwise sweep from the top sits north-east.
+        let mid = points[points.len() / 2];
+        assert!(mid.x > center.x);
+        assert!(mid.y < center.y);
+    }
+
+    #[test]
+    fn a_zero_sweep_is_just_the_centre() {
+        let center = egui::Pos2::new(100.0, 100.0);
+        assert_eq!(wedge_points(center, 7.0, PIE_TOP, 0.0, 8), vec![center]);
+    }
+
+    #[test]
+    fn a_wedge_fan_holds_the_centre_plus_one_rim_point_per_segment_step() {
+        let center = egui::Pos2::new(100.0, 100.0);
+        let points = wedge_points(center, 7.0, PIE_TOP, 1.0, 8);
+        assert_eq!(points.len(), 8 + 2);
+        assert_eq!(points[0], center);
+    }
+
+    #[test]
+    fn a_large_sweep_reaches_past_half_the_circle() {
+        let center = egui::Pos2::new(100.0, 100.0);
+        // 270° clockwise from the top ends due west of the centre.
+        let sweep = 3.0 * std::f32::consts::FRAC_PI_2;
+        let points = wedge_points(center, 7.0, PIE_TOP, sweep, 24);
+        let last_rim = points[points.len() - 1];
+        assert!(last_rim.x < center.x);
+        assert!((last_rim.y - center.y).abs() < 1e-4);
+    }
 
     #[test]
     fn a_selection_survives_a_round_trip_through_the_field_state() {
