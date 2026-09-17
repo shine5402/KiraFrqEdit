@@ -81,7 +81,7 @@ with `time()` when writing v2, so the caller controls only `modified`.
 
 `.frq` participates only under the opt-in `load-frq` (default `off`): `strict` loads `.frq` pitch
 when `desc.mrq` is unavailable, `on` uses it to correct moresampler's own estimate, and the result
-is written to `desc.mrq` either way (tutorial, 0.7.1 era: <https://archive.ph/CTGaA>).
+is written to `desc.mrq` either way (tutorial, 0.7.1 era).
 
 ## The drift problem: a fresh `.llsm` hides `desc.mrq`
 
@@ -163,10 +163,9 @@ entry.
 - Local moresampler 0.8.4 binary in `engines_original` (path in `AGENTS.local.md`; stdout banner
   "Moresampler 0.8.4"); config `...\Resampler\moreconfig.txt` / mirror
   `moreconfig.txt`.
-- The Complete Moresampler Tutorial (Kanru Hua, April 2016, written for 0.7.1), archived 2018-08-13:
-  <https://archive.ph/CTGaA> — `load-frq` semantics, and "`desc.mrq` file is accessed only once
-  when Moresampler generates `.llsm` files, since `.llsm` file already completely describes the
-  speech sample".
+- The Complete Moresampler Tutorial (Kanru Hua, April 2016, written for 0.7.1) — `load-frq`
+  semantics, and "`desc.mrq` file is accessed only once when Moresampler generates `.llsm` files,
+  since `.llsm` file already completely describes the speech sample".
 - The bundled Moresampler readme (0.8.3; path in `AGENTS.local.md`): 0.6.1 changelog defines
   `auto-update-llsm-mrq` ("If the .wav file is newer than the .llsm file, then reanalyze. If the
   .wav file is also newer than the mrq data entry, then re-estimate pitch before reanalyzing
