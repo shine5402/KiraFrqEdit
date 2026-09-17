@@ -4,8 +4,8 @@
 //!
 //! [`generate`] implements #11's input policy, #8's table policy and the batch
 //! semantics of #12; [`generate_wavs`] runs the same pass over an explicit wav
-//! list (the GUI's selection); [`plan`] is the dry-run path (scan plus
-//! existence checks, no decode or analysis).
+//! list; [`plan`] is the dry-run path (scan plus existence checks, no decode
+//! or analysis).
 
 pub mod llsm;
 

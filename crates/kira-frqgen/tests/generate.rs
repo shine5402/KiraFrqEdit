@@ -1,6 +1,6 @@
-//! Contract for `kira_frqgen::generate` and `kira_frqgen::plan` over the
-//! settled policy set, exercised on real wavs in a scratch folder with a fake
-//! [`F0Estimator`] (no WORLD).
+//! Contract for `kira_frqgen::generate`, `kira_frqgen::generate_wavs` and
+//! `kira_frqgen::plan` over the settled policy set, exercised on real wavs in
+//! a scratch folder with a fake [`F0Estimator`] (no WORLD).
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -814,7 +814,7 @@ fn a_single_wav_root_is_a_one_file_run() {
     assert!(scratch.join("A2_wav.frq").is_file());
 }
 
-// --- explicit file lists (the GUI selection) --------------------------------
+// --- explicit file lists -----------------------------------------------------
 
 #[test]
 fn generate_wavs_processes_only_the_listed_wavs() {
@@ -904,6 +904,13 @@ fn missing_and_wavless_roots_are_fatal() {
         run_result(&options(&missing, &[Target::Frq]), &estimator),
         Err(GeneratorError::Scan { .. })
     ));
+    assert!(
+        matches!(
+            run_result(&options(&missing, &[]), &estimator),
+            Err(GeneratorError::Config(_))
+        ),
+        "config is validated before the scan"
+    );
 
     let empty = scratch.sub("empty");
     assert!(matches!(

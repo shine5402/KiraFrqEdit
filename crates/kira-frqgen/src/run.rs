@@ -37,15 +37,17 @@ pub fn generate(
     progress: &dyn Progress,
     cancel: &CancelToken,
 ) -> Result<RunSummary, GeneratorError> {
+    // Config before the filesystem, so an invalid run reports the config
+    // problem even when the root is bad too.
+    validate(opts)?;
     let wavs = scan_wavs(&opts.root)?;
     generate_wavs(opts, &wavs, estimator, progress, cancel)
 }
 
-/// Run the generation pass over an explicit wav list instead of a scan — the
-/// GUI's selection. Semantics are identical to [`generate`] (including the
-/// per-folder mrq merge); `opts.root` is not consulted, so the caller passes
-/// the same options it planned with. An empty list is a
-/// [`GeneratorError::Config`].
+/// Run the generation pass over an explicit wav list instead of a scan.
+/// Semantics are identical to [`generate`] (including the per-folder mrq
+/// merge); `opts.root` is not consulted, so the caller passes the same options
+/// it planned with. An empty list is a [`GeneratorError::Config`].
 pub fn generate_wavs(
     opts: &GenerateOptions,
     wavs: &[PathBuf],

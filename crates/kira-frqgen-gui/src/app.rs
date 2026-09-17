@@ -1,9 +1,6 @@
 //! The KiraFrqGen window (#23): shell B from #13 — options sidebar, drop area
 //! that becomes a tri-state wav tree, and an in-place run view fed by the
-//! pipeline's progress events.
-//!
-//! Session-only settings by design (#13): nothing here is persisted, so every
-//! launch starts from the defaults.
+//! pipeline's progress events. Settings live for the session only (#13).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -21,53 +18,61 @@ use kira_frqgen::{
 };
 
 use crate::run::{Row, RunState, Status};
-use crate::tree::{DirNode, Targets, Tree, WavEntry, missing_label};
+use crate::tree::{DirNode, Targets, Tree, WavEntry, missing_label, target_name};
+
+/// Lock the run state, recovering a poisoned mutex: a panicked worker must not
+/// take the window down with it.
+fn lock(state: &Mutex<RunState>) -> MutexGuard<'_, RunState> {
+    state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// A run in flight: shared state the worker writes and the window reads, plus
-/// the token the Cancel button flips. The worker thread is detached; a run is
-/// only ever replaced once its state says it finished.
+/// the token that stops it. The worker thread is detached; a run is only ever
+/// replaced once its state says it finished.
 struct RunSession {
     state: Arc<Mutex<RunState>>,
-    cancel: CancelToken,
+    stop: CancelToken,
+}
+
+impl RunSession {
+    /// The Cancel button: flag the UI and ask the pipeline to stop after the
+    /// file it is on.
+    fn cancel(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+        lock(&self.state).request_cancel();
+    }
 }
 
 impl Drop for RunSession {
     fn drop(&mut self) {
         // A detached worker may be mid-file: ask it to stop after the current
         // one rather than blocking the UI thread on a join.
-        self.cancel.store(true, Ordering::SeqCst);
+        self.stop.store(true, Ordering::SeqCst);
     }
 }
 
-/// The [`Progress`] bridge: pipeline callbacks land in the shared run state,
-/// and every event asks egui for a repaint so the rows move while the worker
-/// is busy.
+/// The [`Progress`] bridge into the shared run state; every event asks egui
+/// for a repaint so the rows move while the worker is busy.
 struct GuiProgress {
     state: Arc<Mutex<RunState>>,
     ctx: egui::Context,
 }
 
-impl GuiProgress {
-    fn state(&self) -> MutexGuard<'_, RunState> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-}
-
 impl Progress for GuiProgress {
     fn file_started(&self, wav: &Path) {
-        self.state().started(wav);
+        lock(&self.state).started(wav);
         self.ctx.request_repaint();
     }
 
     fn file_finished(&self, report: &FileReport) {
-        self.state().finished_file(report);
+        lock(&self.state).finished_file(report);
         self.ctx.request_repaint();
     }
 
     fn finished(&self, summary: &RunSummary) {
-        self.state().finished(summary);
+        lock(&self.state).finished(summary);
         self.ctx.request_repaint();
     }
 }
@@ -121,12 +126,7 @@ impl KiraFrqGenApp {
     }
 
     fn run_state(&self) -> Option<MutexGuard<'_, RunState>> {
-        self.run.as_ref().map(|session| {
-            session
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-        })
+        self.run.as_ref().map(|session| lock(&session.state))
     }
 
     fn is_running(&self) -> bool {
@@ -137,15 +137,14 @@ impl KiraFrqGenApp {
         self.run_state().is_some_and(|state| !state.is_running())
     }
 
-    /// The sharing flag as the pipeline wants it: `Some` only when the
-    /// checkbox is on and mrq is being written. `Sharing::native` is the
-    /// 932 no-op on platforms without an 8-bit layer, so nothing is forced.
+    /// `Sharing::native` is a 932 no-op on platforms without an 8-bit code
+    /// page, so checking the box cannot force a conversion there.
     fn sharing(&self) -> Option<Sharing> {
         (self.japanese_codepage && self.targets.mrq).then(Sharing::native)
     }
 
-    /// Plan options: all three formats, so the tree knows every format's
-    /// existence regardless of what the sidebar has checked.
+    /// Plan with every format so the tree can label each one, regardless of
+    /// what the sidebar has checked.
     fn plan_options(&self, root: PathBuf) -> GenerateOptions {
         GenerateOptions {
             root,
@@ -232,7 +231,7 @@ impl KiraFrqGenApp {
     }
 
     /// Hand the selected wavs to the real pipeline on a worker thread.
-    fn start(&mut self, ctx: &egui::Context) {
+    fn start_run(&mut self, ctx: &egui::Context) {
         let Some(tree) = &self.tree else {
             return;
         };
@@ -246,25 +245,23 @@ impl KiraFrqGenApp {
         }
         let opts = self.run_options(tree.root.clone());
         let state = Arc::new(Mutex::new(RunState::new(wavs.clone())));
-        let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+        let stop: CancelToken = Arc::new(AtomicBool::new(false));
         let progress = GuiProgress {
             state: Arc::clone(&state),
             ctx: ctx.clone(),
         };
         let worker_state = Arc::clone(&state);
-        let worker_cancel = Arc::clone(&cancel);
+        let worker_stop = Arc::clone(&stop);
         std::thread::spawn(move || {
             let estimator = WorldEstimator::new(opts.f0);
-            let outcome = generate_wavs(&opts, &wavs, &estimator, &progress, &worker_cancel);
-            let mut state = worker_state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let outcome = generate_wavs(&opts, &wavs, &estimator, &progress, &worker_stop);
+            let mut state = lock(&worker_state);
             match outcome {
                 Ok(summary) => state.finished(&summary),
-                Err(error) => state.failed(error.to_string()),
+                Err(error) => state.aborted(error.to_string()),
             }
         });
-        self.run = Some(RunSession { state, cancel });
+        self.run = Some(RunSession { state, stop });
     }
 
     fn tree_total(&self) -> usize {
@@ -319,7 +316,7 @@ impl KiraFrqGenApp {
             if ui
                 .add_enabled(
                     self.targets.mrq,
-                    egui::Checkbox::new(&mut self.japanese_codepage, "Ensure Japanese code page"),
+                    egui::Checkbox::new(&mut self.japanese_codepage, "Sharing flag"),
                 )
                 .on_hover_text(sharing_hint)
                 .changed()
@@ -374,12 +371,7 @@ impl KiraFrqGenApp {
                         .clicked()
                         && let Some(session) = &self.run
                     {
-                        session.cancel.store(true, Ordering::SeqCst);
-                        session
-                            .state
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .request_cancel();
+                        session.cancel();
                     }
                 });
             } else if self.run_ended() {
@@ -404,7 +396,7 @@ impl KiraFrqGenApp {
                     .clicked()
                 {
                     let ctx = ui.ctx().clone();
-                    self.start(&ctx);
+                    self.start_run(&ctx);
                 }
             }
             ui.add_space(4.0);
@@ -509,17 +501,7 @@ impl KiraFrqGenApp {
         };
         ui.painter()
             .rect_filled(rect, visuals.widgets.noninteractive.corner_radius, fill);
-        let r = rect.shrink(1.0);
-        let path = [
-            r.left_top(),
-            r.right_top(),
-            r.right_bottom(),
-            r.left_bottom(),
-            r.left_top(),
-        ];
-        for shape in Shape::dashed_line(&path, stroke, 9.0, 7.0) {
-            ui.painter().add(shape);
-        }
+        dashed_border(ui.painter(), rect.shrink(1.0), stroke, 9.0, 7.0);
         ui.painter().text(
             rect.center() - Vec2::new(0.0, 44.0),
             Align2::CENTER_CENTER,
@@ -550,20 +532,23 @@ impl KiraFrqGenApp {
         let Some(tree) = &self.tree else {
             return;
         };
-        let targets = self.targets;
         let counts = tree.selected_counts(&self.selected);
-        let selected = &mut self.selected;
-        let expanded = &mut self.expanded;
+        let mut ctx = TreeCtx {
+            selected: &mut self.selected,
+            expanded: &mut self.expanded,
+            targets: self.targets,
+            counts: &counts,
+        };
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .id_salt("tree")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     for entry in &tree.root_files {
-                        tree_file(ui, entry, selected, targets, 0);
+                        tree_file(ui, entry, &mut ctx, 0);
                     }
                     for dir in &tree.dirs {
-                        tree_dir(ui, dir, selected, expanded, targets, &counts, 0);
+                        tree_dir(ui, dir, &mut ctx, 0);
                     }
                 });
         });
@@ -578,10 +563,7 @@ impl KiraFrqGenApp {
             .as_ref()
             .map(|tree| tree.root.clone())
             .unwrap_or_default();
-        let state = session
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = lock(&session.state);
         let mut back = false;
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.add(egui::ProgressBar::new(state.fraction()).text(format!(
@@ -613,7 +595,7 @@ impl KiraFrqGenApp {
                         };
                         let mut parts = vec![
                             format!("{} written", summary.written),
-                            format!("{} failed", summary.failed.len()),
+                            format!("{} failed", state.failed_rows()),
                         ];
                         if !summary.warnings.is_empty() {
                             parts.push(format!("{} warnings", summary.warnings.len()));
@@ -648,16 +630,7 @@ impl KiraFrqGenApp {
         let painter = ctx.layer_painter(layer);
         painter.rect_filled(window, 0.0, Color32::from_black_alpha(140));
         let r = window.shrink(18.0);
-        let path = [
-            r.left_top(),
-            r.right_top(),
-            r.right_bottom(),
-            r.left_bottom(),
-            r.left_top(),
-        ];
-        for shape in Shape::dashed_line(&path, Stroke::new(2.5, Color32::WHITE), 14.0, 10.0) {
-            painter.add(shape);
-        }
+        dashed_border(&painter, r, Stroke::new(2.5, Color32::WHITE), 14.0, 10.0);
         painter.text(
             r.center() - Vec2::new(0.0, 50.0),
             Align2::CENTER_CENTER,
@@ -686,8 +659,6 @@ impl eframe::App for KiraFrqGenApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let running = self.is_running();
 
-        // Drops replace the path; the overlay hint still shows with a path
-        // set. Both are suppressed while a run is in flight (#13).
         if !running {
             let dropped = ui.input(|input| {
                 input
@@ -741,6 +712,15 @@ impl eframe::App for KiraFrqGenApp {
 
 // --------------------------------------------------------------------- tree
 
+/// What every tree row needs besides its node: the shared selection, the
+/// expand state, the checked formats and the per-folder selected counts.
+struct TreeCtx<'a> {
+    selected: &'a mut BTreeSet<PathBuf>,
+    expanded: &'a mut HashSet<PathBuf>,
+    targets: Targets,
+    counts: &'a HashMap<PathBuf, usize>,
+}
+
 fn collect_dir_paths(dir: &DirNode, expanded: &mut HashSet<PathBuf>) {
     expanded.insert(dir.path.clone());
     for child in &dir.dirs {
@@ -748,16 +728,8 @@ fn collect_dir_paths(dir: &DirNode, expanded: &mut HashSet<PathBuf>) {
     }
 }
 
-fn tree_dir(
-    ui: &mut egui::Ui,
-    dir: &DirNode,
-    selected: &mut BTreeSet<PathBuf>,
-    expanded: &mut HashSet<PathBuf>,
-    targets: Targets,
-    counts: &HashMap<PathBuf, usize>,
-    depth: usize,
-) {
-    let is_open = expanded.contains(&dir.path);
+fn tree_dir(ui: &mut egui::Ui, dir: &DirNode, ctx: &mut TreeCtx, depth: usize) {
+    let is_open = ctx.expanded.contains(&dir.path);
     ui.horizontal(|ui| {
         ui.add_space(depth as f32 * 18.0);
         let caret = if is_open {
@@ -766,9 +738,9 @@ fn tree_dir(
             icons::CARET_RIGHT
         };
         if ui.add(egui::Button::new(caret).frame(false)).clicked() {
-            toggle(expanded, &dir.path);
+            toggle(ctx.expanded, &dir.path);
         }
-        let count = counts.get(&dir.path).copied().unwrap_or(0);
+        let count = ctx.counts.get(&dir.path).copied().unwrap_or(0);
         let state = if count == 0 {
             Tri::Off
         } else if count == dir.total {
@@ -780,9 +752,9 @@ fn tree_dir(
             let want = state != Tri::On;
             for path in dir.entries().map(|entry| &entry.path) {
                 if want {
-                    selected.insert(path.clone());
+                    ctx.selected.insert(path.clone());
                 } else {
-                    selected.remove(path);
+                    ctx.selected.remove(path);
                 }
             }
         }
@@ -799,35 +771,29 @@ fn tree_dir(
             )
             .clicked()
         {
-            toggle(expanded, &dir.path);
+            toggle(ctx.expanded, &dir.path);
         }
         ui.weak(format!("{count}/{}", dir.total));
     });
     if is_open {
         for child in &dir.dirs {
-            tree_dir(ui, child, selected, expanded, targets, counts, depth + 1);
+            tree_dir(ui, child, ctx, depth + 1);
         }
         for entry in &dir.files {
-            tree_file(ui, entry, selected, targets, depth + 1);
+            tree_file(ui, entry, ctx, depth + 1);
         }
     }
 }
 
-fn tree_file(
-    ui: &mut egui::Ui,
-    entry: &WavEntry,
-    selected: &mut BTreeSet<PathBuf>,
-    targets: Targets,
-    depth: usize,
-) {
+fn tree_file(ui: &mut egui::Ui, entry: &WavEntry, ctx: &mut TreeCtx, depth: usize) {
     ui.horizontal(|ui| {
         ui.add_space(depth as f32 * 18.0 + 26.0);
-        let mut checked = selected.contains(&entry.path);
+        let mut checked = ctx.selected.contains(&entry.path);
         if ui.checkbox(&mut checked, "").changed() {
             if checked {
-                selected.insert(entry.path.clone());
+                ctx.selected.insert(entry.path.clone());
             } else {
-                selected.remove(&entry.path);
+                ctx.selected.remove(&entry.path);
             }
         }
         let name = entry
@@ -836,7 +802,7 @@ fn tree_file(
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         ui.label(format!("{} {name}", icons::FILE_AUDIO));
-        ui.weak(missing_label(entry, targets));
+        ui.weak(missing_label(entry, ctx.targets));
     });
 }
 
@@ -913,7 +879,9 @@ fn run_row(ui: &mut egui::Ui, row: &Row, root: &Path, time: f64) {
             // One fixed icon slot for every state, so rows never shift.
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
             match &row.status {
-                Status::Pending => progress_ring(ui, rect),
+                Status::Pending => {
+                    progress_ring(ui, rect);
+                }
                 Status::Running => progress_spinner(ui, rect, time),
                 Status::Written(_) => {
                     status_glyph(ui, rect, icons::CHECK, ui.visuals().text_color())
@@ -954,11 +922,8 @@ fn run_row(ui: &mut egui::Ui, row: &Row, root: &Path, time: f64) {
 fn target_names(targets: &BTreeSet<Target>) -> String {
     targets
         .iter()
-        .map(|target| match target {
-            Target::Frq => "frq",
-            Target::Pmk => "pmk",
-            Target::Mrq => "mrq",
-        })
+        .copied()
+        .map(target_name)
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -983,24 +948,34 @@ fn status_glyph(ui: &egui::Ui, rect: egui::Rect, glyph: &str, color: Color32) {
     );
 }
 
-/// The empty ring a pending row shows.
-fn progress_ring(ui: &egui::Ui, rect: egui::Rect) {
+fn dashed_border(painter: &egui::Painter, rect: egui::Rect, stroke: Stroke, dash: f32, gap: f32) {
+    let path = [
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+        rect.left_top(),
+    ];
+    for shape in Shape::dashed_line(&path, stroke, dash, gap) {
+        painter.add(shape);
+    }
+}
+
+/// The empty ring a pending row shows; returns its centre and radius for the
+/// spinner to draw over.
+fn progress_ring(ui: &egui::Ui, rect: egui::Rect) -> (egui::Pos2, f32) {
     let center = rect.center();
     let radius = rect.width() * 0.5 - 1.0;
     let ring = ui.visuals().weak_text_color().gamma_multiply(0.6);
     ui.painter()
         .circle_stroke(center, radius, Stroke::new(1.5, ring));
+    (center, radius)
 }
 
-/// A rotating arc for the running row: there is no per-file fraction in the
-/// pipeline's progress events, so the icon is honestly indeterminate.
 fn progress_spinner(ui: &egui::Ui, rect: egui::Rect, time: f64) {
-    let center = rect.center();
-    let radius = rect.width() * 0.5 - 1.0;
-    let ring = ui.visuals().weak_text_color().gamma_multiply(0.6);
+    let (center, radius) = progress_ring(ui, rect);
     let fill = ui.visuals().selection.bg_fill;
     let painter = ui.painter();
-    painter.circle_stroke(center, radius, Stroke::new(1.5, ring));
     let start = (time * 2.4).rem_euclid(std::f64::consts::TAU) as f32;
     let sweep = 1.7_f32;
     let segments = 10;

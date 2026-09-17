@@ -14,9 +14,7 @@ pub enum Status {
     /// The pipeline is decoding, estimating or writing; no per-file progress
     /// event exists, so the icon is indeterminate.
     Running,
-    /// At least one target was written.
     Written(BTreeSet<Target>),
-    /// One or more targets failed; the reasons are shown.
     Failed(Vec<String>),
     /// Nothing written and nothing failed: the tables existed, or the wav was
     /// zero-length or too short for the only requested entry.
@@ -26,7 +24,6 @@ pub enum Status {
         /// Targets the wav cannot produce a table for (sub-hop mrq, #8).
         no_entry: BTreeSet<Target>,
     },
-    /// Cancellation arrived before this wav's writes.
     Cancelled,
 }
 
@@ -96,6 +93,7 @@ impl RunState {
         }
     }
 
+    /// The rows in selection order.
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
@@ -122,27 +120,32 @@ impl RunState {
 
     /// The run never started or aborted outside the per-file path (scan or
     /// configuration error).
-    pub fn failed(&mut self, error: String) {
+    pub fn aborted(&mut self, error: String) {
         self.error = Some(error);
     }
 
-    /// The Cancel button was pressed; the token is the caller's.
+    /// Marks the cancel button as pressed and disables it; the caller's token
+    /// is what stops the pipeline.
     pub fn request_cancel(&mut self) {
         self.cancel_requested = true;
     }
 
+    /// The button already fired; the run may still be finishing its file.
     pub fn cancel_requested(&self) -> bool {
         self.cancel_requested
     }
 
+    /// True until the summary or a fatal error has landed.
     pub fn is_running(&self) -> bool {
         self.summary.is_none() && self.error.is_none()
     }
 
+    /// The final summary, once `Progress::finished` fired.
     pub fn summary(&self) -> Option<&RunSummary> {
         self.summary.as_ref()
     }
 
+    /// The fatal error that stopped the run before any summary.
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
@@ -152,6 +155,15 @@ impl RunState {
         self.rows
             .iter()
             .filter(|row| row.status.is_resolved())
+            .count()
+    }
+
+    /// The rows with at least one failure — one per wav, unlike
+    /// [`RunSummary::failed`], which holds one entry per reason.
+    pub fn failed_rows(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| matches!(row.status, Status::Failed(_)))
             .count()
     }
 
@@ -248,6 +260,7 @@ mod tests {
             Status::Failed(vec!["frq: permission denied".into()]),
             "a partial failure shows as failed"
         );
+        assert_eq!(state.failed_rows(), 1, "counted per wav, not per reason");
 
         let mut warned = report("/bank/A2.wav");
         warned.written.insert(Target::Frq);
@@ -294,7 +307,7 @@ mod tests {
     #[test]
     fn a_fatal_error_stops_the_run_too() {
         let mut state = state(&["/bank/A2.wav"]);
-        state.failed("no wav files found".into());
+        state.aborted("no wav files found".into());
 
         assert!(!state.is_running());
         assert_eq!(state.error(), Some("no wav files found"));

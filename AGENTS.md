@@ -29,7 +29,7 @@ outputs wrong pitch, glitches and pops.
   WORLD vendored under `third_party/World`, per-platform compiler CI (clang-cl / Apple clang /
   gcc) and tag-triggered CD under
   `.github/workflows/`. The core formats, WAV normalization, the generation pipeline, the CLI and
-  the GUI (shell B, #23) have landed; next is end-to-end validation (#22).
+  the GUI (#23) have landed; next is end-to-end validation (#22).
 - Research results live in `docs/research/` (README is the index); format specs were verified
   against real files from the local UTAU corpus where possible.
 

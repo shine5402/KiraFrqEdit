@@ -17,24 +17,28 @@ pub struct Targets {
 }
 
 impl Targets {
-    /// At least one format is checked; a run with none cannot start.
+    /// At least one format is checked.
     pub fn any(self) -> bool {
         self.frq || self.pmk || self.mrq
     }
 
-    /// The checked formats in fixed order (frq, pmk, mrq), as `plan` wants them.
+    /// The checked formats as `plan` wants them.
     pub fn set(self) -> BTreeSet<Target> {
-        let mut set = BTreeSet::new();
+        self.checked().collect()
+    }
+
+    pub fn checked(self) -> impl Iterator<Item = Target> {
+        let mut formats = Vec::new();
         if self.frq {
-            set.insert(Target::Frq);
+            formats.push(Target::Frq);
         }
         if self.pmk {
-            set.insert(Target::Pmk);
+            formats.push(Target::Pmk);
         }
         if self.mrq {
-            set.insert(Target::Mrq);
+            formats.push(Target::Mrq);
         }
-        set
+        formats.into_iter()
     }
 }
 
@@ -112,7 +116,7 @@ impl Tree {
             if dirs.is_empty() {
                 tree.root_files.push(entry);
             } else {
-                insert(&mut tree.dirs, root, dirs, entry);
+                insert_entry(&mut tree.dirs, root, dirs, entry);
             }
         }
         for dir in &mut tree.dirs {
@@ -120,7 +124,6 @@ impl Tree {
         }
         tree
     }
-
     /// Every wav in display order: root files first, then folders (subfolders
     /// ahead of the folder's own files), matching the rendered tree.
     pub fn all_wavs(&self) -> Vec<PathBuf> {
@@ -169,7 +172,7 @@ impl Tree {
 
 /// Add `entry` to the subtree named by `components` (dirs only; the file name
 /// is already split off), creating folders as needed.
-fn insert(
+fn insert_entry(
     dirs: &mut Vec<DirNode>,
     parent: &Path,
     components: &[&std::ffi::OsStr],
@@ -194,7 +197,7 @@ fn insert(
         dirs[index].files.push(entry);
     } else {
         let child_path = dirs[index].path.clone();
-        insert(&mut dirs[index].dirs, &child_path, &components[1..], entry);
+        insert_entry(&mut dirs[index].dirs, &child_path, &components[1..], entry);
     }
 }
 
@@ -225,28 +228,32 @@ fn count_selected(
     count
 }
 
-/// Whether `entry` lacks any checked format.
-pub fn missing_any(entry: &WavEntry, targets: Targets) -> bool {
-    (targets.frq && !entry.existing.contains(&Target::Frq))
-        || (targets.pmk && !entry.existing.contains(&Target::Pmk))
-        || (targets.mrq && !entry.existing.contains(&Target::Mrq))
+/// The display name of a format.
+pub fn target_name(target: Target) -> &'static str {
+    match target {
+        Target::Frq => "frq",
+        Target::Pmk => "pmk",
+        Target::Mrq => "mrq",
+    }
 }
 
-/// The dim per-file label: `missing frq, pmk`, `complete`, or `—` when no
-/// format is checked.
+/// Whether `entry` lacks any checked format.
+pub fn missing_any(entry: &WavEntry, targets: Targets) -> bool {
+    targets
+        .checked()
+        .any(|target| !entry.existing.contains(&target))
+}
+
+/// The dim per-file label: the formats the entry lacks; `complete` when it has
+/// them all, `—` when nothing is checked.
 pub fn missing_label(entry: &WavEntry, targets: Targets) -> String {
-    let mut parts = Vec::new();
-    for (checked, target, name) in [
-        (targets.frq, Target::Frq, "frq"),
-        (targets.pmk, Target::Pmk, "pmk"),
-        (targets.mrq, Target::Mrq, "mrq"),
-    ] {
-        if checked && !entry.existing.contains(&target) {
-            parts.push(name);
-        }
-    }
-    if !parts.is_empty() {
-        format!("missing {}", parts.join(", "))
+    let missing: Vec<&str> = targets
+        .checked()
+        .filter(|target| !entry.existing.contains(target))
+        .map(target_name)
+        .collect();
+    if !missing.is_empty() {
+        format!("missing {}", missing.join(", "))
     } else if targets.any() {
         "complete".to_owned()
     } else {
