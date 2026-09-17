@@ -26,10 +26,12 @@ Entries (`N` × 8 bytes):
 
 - File size is exactly `14 + 8*N` in all 1,231 local files.
 - **`code == 49` means unvoiced / no pitch.** Every local file uses 49 as its minimum, with huge
-  counts of it (1.59M occurrences across the corpus). It is *not* a literal 900 Hz: TIPS's
-  documented detection range is 86–880 Hz (min real code 50). Values 53–59 appear rarely.
-  Other codes observed: 50–448 across the corpus (~98–882 Hz), the bulk of voiced entries in
-  120–300; the low end comes from low-pitched banks.
+  counts of it (1.59M occurrences across the corpus). It is *not* a literal 900 Hz: TIPS 0.19β
+  accepts voiced codes only in `50..=511` (f0 ≈ 86.3–882 Hz); a period that would round to 512 or
+  higher is written as 49 instead. Black-box (#37): a hand-edited file containing a code `>= 512`
+  makes TIPS produce no output wav at all, so the whole entry renders silent. Values 53–59 appear
+  rarely. Other codes observed: 50–448 across the corpus (~98–882 Hz), the bulk of voiced entries
+  in 120–300; the low end comes from low-pitched banks.
 - `pos_end` is approximately cumulative: within a run of constant `code`, consecutive entries
   advance by exactly that code. At transitions the increments deviate slightly (±dozens of samples
   total per file) — the values appear pitch-mark aligned rather than recomputed. Do not
@@ -56,6 +58,8 @@ Entries (`N` × 8 bytes):
 ## Sources
 
 - TIPS 0.19β readme (ScientistB): <http://scientistb.web.fc2.com/program/index.html> (no format docs)
+- Black-box TIPS 0.19β runs on synthetic tables (#37): a code `>= 512` produces no output wav, 511
+  renders; the local binary was only observed, never inspected.
 - UTAU音源制作wiki 周波数表: <https://w.atwiki.jp/vbmaker/pages/54.html>
 - An earlier clean-room draft was largely correct; corrections below.
 

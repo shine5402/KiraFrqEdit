@@ -6,9 +6,9 @@
 //! The writer projects a [`FrequencyTable`] onto the 44.1 kHz sample timeline
 //! as `(pos_end, code)` period segments: `code` is the nearest integer period
 //! in samples, `49` marks unvoiced, and the walk advances by the *unrounded*
-//! period so the rounding never accumulates into drift. f0 outside TIPS's
-//! detected range (86–882 Hz, i.e. codes `50..=513`) is stored as unvoiced,
-//! since the writer does not invent a range TIPS does not have.
+//! period so the rounding never accumulates into drift. f0 outside the
+//! accepted period range (`MIN_VOICED_CODE..=MAX_VOICED_CODE`) is stored as
+//! unvoiced, since the writer does not invent a range TIPS does not have (#37).
 //!
 //! The module is path-agnostic: the pipeline owns sidecar naming
 //! (`<stem>_wav.pmk`, #9) and passes the normalized wav length, because the
@@ -29,8 +29,10 @@ pub const UNVOICED_CODE: i32 = 49;
 /// Lowest voiced `code` (44100/50 = 882 Hz).
 pub const MIN_VOICED_CODE: i32 = 50;
 
-/// Highest voiced `code` (44100/513 ≈ 86 Hz).
-pub const MAX_VOICED_CODE: i32 = 513;
+/// Highest voiced `code` TIPS accepts: TIPS 0.19β writes no output wav when
+/// any code reaches 512 (black-box, #37). The corpus's highest stored code is
+/// 448.
+pub const MAX_VOICED_CODE: i32 = 511;
 
 /// The sample rate the pmk timeline is defined on.
 pub const SAMPLE_RATE: u32 = 44_100;
