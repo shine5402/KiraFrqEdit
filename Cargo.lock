@@ -1822,6 +1822,7 @@ dependencies = [
 name = "kira-frqgen"
 version = "0.0.0"
 dependencies = [
+ "hound",
  "kira-frq-core",
  "kira-frq-world",
  "rayon",
