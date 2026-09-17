@@ -164,6 +164,7 @@ impl F0Estimator for FakeEstimator {
         samples: &[f64],
         sample_rate: u32,
         frame_period_ms: f64,
+        _observer: Option<&dyn kirafrq_world_binding::FrameObserver>,
     ) -> Result<F0Track, GeneratorError> {
         let call = self.calls.lock().unwrap().len() + 1;
         self.calls.lock().unwrap().push(Call {
@@ -193,6 +194,7 @@ impl F0Estimator for FakeEstimator {
         _samples: &[f64],
         _sample_rate: u32,
         track: &mut F0Track,
+        _observer: Option<&dyn kirafrq_world_binding::FrameObserver>,
     ) -> Result<(), GeneratorError> {
         self.refined.fetch_add(1, Ordering::SeqCst);
         for value in &mut track.f0_hz {
@@ -981,4 +983,176 @@ fn progress_reports_every_file_folder_and_the_summary() {
     assert!(folders.contains(&scratch.join("A2")));
     assert!(folders.contains(&scratch.join("B2")));
     assert!(progress.run_summary.lock().unwrap().is_some());
+}
+
+// --- frame progress (#34) ---------------------------------------------------
+
+use kirafrq_world_binding::{FrameObserver, ProgressStage};
+
+/// Fake estimator that plays a scripted (stage, done, total) sequence through
+/// the observer instead of analyzing anything.
+struct ScriptedEstimator;
+
+impl F0Estimator for ScriptedEstimator {
+    fn estimate(
+        &self,
+        samples: &[f64],
+        _sample_rate: u32,
+        frame_period_ms: f64,
+        observer: Option<&dyn FrameObserver>,
+    ) -> Result<F0Track, GeneratorError> {
+        if let Some(observer) = observer {
+            for done in 1..=4 {
+                observer.report(ProgressStage::Estimate, done, 4);
+            }
+        }
+        let frames = samples.len() / 256 + 1;
+        Ok(F0Track {
+            frame_period_ms,
+            temporal_positions: (0..frames)
+                .map(|index| index as f64 * frame_period_ms / 1000.0)
+                .collect(),
+            f0_hz: vec![110.0; frames],
+        })
+    }
+
+    fn refine_stonemask(
+        &self,
+        _samples: &[f64],
+        _sample_rate: u32,
+        _track: &mut F0Track,
+        observer: Option<&dyn FrameObserver>,
+    ) -> Result<(), GeneratorError> {
+        if let Some(observer) = observer {
+            for done in 1..=4 {
+                observer.report(ProgressStage::Refine, done, 4);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct ProgressTape {
+    events: Mutex<Vec<(PathBuf, u64, u64)>>,
+}
+
+impl Progress for ProgressTape {
+    fn wants_file_progress(&self) -> bool {
+        true
+    }
+
+    fn file_progress(&self, wav: &Path, done: u64, total: u64) {
+        self.events
+            .lock()
+            .unwrap()
+            .push((wav.to_path_buf(), done, total));
+    }
+}
+
+#[test]
+fn file_progress_composes_estimate_and_refine_into_one_permille() {
+    let scratch = Scratch::new("file-progress");
+    let wav = write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.stone_mask = true;
+    let progress = ProgressTape::default();
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+    generate(&opts, &ScriptedEstimator, &progress, &cancel).unwrap();
+
+    let events = progress.events.lock().unwrap();
+    let fractions: Vec<u64> = events
+        .iter()
+        .filter(|(path, _, _)| *path == wav)
+        .map(|(_, done, _)| *done)
+        .collect();
+    // The analysis owns the first 90% (estimate the first half of that,
+    // refinement the second), latched so the sequence never moves backwards;
+    // the terminal 1000 fires once the tables are written.
+    assert_eq!(fractions, [112, 225, 337, 450, 562, 675, 787, 900, 1000]);
+    assert!(events.iter().all(|(_, _, total)| *total == 1000));
+}
+
+#[test]
+fn file_progress_without_stonemask_gives_estimate_the_whole_analysis() {
+    let scratch = Scratch::new("file-progress-no-refine");
+    let wav = write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.stone_mask = false;
+    let progress = ProgressTape::default();
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+    generate(&opts, &ScriptedEstimator, &progress, &cancel).unwrap();
+
+    let events = progress.events.lock().unwrap();
+    let fractions: Vec<u64> = events
+        .iter()
+        .filter(|(path, _, _)| *path == wav)
+        .map(|(_, done, _)| *done)
+        .collect();
+    assert_eq!(fractions, [225, 450, 675, 900, 1000]);
+}
+
+#[test]
+fn file_progress_splits_the_write_share_across_targets() {
+    let scratch = Scratch::new("file-progress-units");
+    let wav = write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);
+    let opts = options(&scratch.0, &[Target::Frq, Target::Pmk]);
+    let progress = ProgressTape::default();
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+    generate(&opts, &ScriptedEstimator, &progress, &cancel).unwrap();
+
+    let events = progress.events.lock().unwrap();
+    let fractions: Vec<u64> = events
+        .iter()
+        .filter(|(path, _, _)| *path == wav)
+        .map(|(_, done, _)| *done)
+        .collect();
+    // StoneMask is on by default: analysis to 900, then one 50-share per
+    // written target.
+    assert_eq!(
+        fractions,
+        [112, 225, 337, 450, 562, 675, 787, 900, 950, 1000]
+    );
+}
+
+#[test]
+fn file_progress_credits_a_deferred_mrq_share_at_the_folder_merge() {
+    let scratch = Scratch::new("file-progress-mrq");
+    let wav = write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);
+    let opts = options(&scratch.0, &[Target::Frq, Target::Mrq]);
+    let progress = ProgressTape::default();
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+    generate(&opts, &ScriptedEstimator, &progress, &cancel).unwrap();
+
+    let events = progress.events.lock().unwrap();
+    let fractions: Vec<u64> = events
+        .iter()
+        .filter(|(path, _, _)| *path == wav)
+        .map(|(_, done, _)| *done)
+        .collect();
+    // The frq share lands in phase A; the mrq share waits for the merge.
+    assert_eq!(
+        fractions,
+        [112, 225, 337, 450, 562, 675, 787, 900, 950, 1000]
+    );
+    assert!(
+        events.iter().any(|(_, done, _)| *done == 1000),
+        "the merge completes the file"
+    );
+}
+
+#[test]
+fn skipped_wavs_emit_no_progress_events() {
+    let scratch = Scratch::new("progress-skip");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);
+    let estimator = FakeEstimator::new(&[100.0]);
+    let opts = options(&scratch.0, &[Target::Frq]);
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+    let first = ProgressTape::default();
+    generate(&opts, &estimator, &first, &cancel).unwrap();
+
+    // Every table exists now, so the second run skips analysis entirely.
+    let second = ProgressTape::default();
+    generate(&opts, &estimator, &second, &cancel).unwrap();
+    assert!(second.events.lock().unwrap().is_empty());
 }

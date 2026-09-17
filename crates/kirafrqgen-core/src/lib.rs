@@ -15,6 +15,7 @@ mod scan;
 mod table;
 
 pub use kirafrq_formats::mrq::Sharing;
+pub use kirafrq_world_binding::{FrameObserver, ProgressStage};
 pub use run::{generate, generate_wavs, plan};
 
 use std::collections::BTreeSet;
@@ -61,12 +62,16 @@ pub struct F0Track {
 
 /// The estimator seam: generation talks to f0 estimation only through this
 /// trait, so tests inject fakes and the pipeline never names WORLD.
+///
+/// The optional observer carries frame progress out of the analysis (#34);
+/// `None` means no reporting and no added overhead.
 pub trait F0Estimator: Send + Sync {
     fn estimate(
         &self,
         samples: &[f64],
         sample_rate: u32,
         frame_period_ms: f64,
+        observer: Option<&dyn FrameObserver>,
     ) -> Result<F0Track, GeneratorError>;
 
     /// StoneMask refinement; estimators without it keep the default no-op.
@@ -75,6 +80,7 @@ pub trait F0Estimator: Send + Sync {
         _samples: &[f64],
         _sample_rate: u32,
         _track: &mut F0Track,
+        _observer: Option<&dyn FrameObserver>,
     ) -> Result<(), GeneratorError> {
         Ok(())
     }
@@ -97,6 +103,7 @@ impl F0Estimator for WorldEstimator {
         samples: &[f64],
         sample_rate: u32,
         frame_period_ms: f64,
+        observer: Option<&dyn FrameObserver>,
     ) -> Result<F0Track, GeneratorError> {
         let estimator = match self.config.estimator {
             Estimator::Dio => kirafrq_world_binding::Estimator::Dio,
@@ -107,8 +114,14 @@ impl F0Estimator for WorldEstimator {
             f0_ceiling_hz: self.config.ceiling_hz,
             frame_period_ms,
         };
-        let track = kirafrq_world_binding::estimate_f0(estimator, samples, sample_rate, &options)
-            .map_err(|error| GeneratorError::Estimation(error.to_string()))?;
+        let track = kirafrq_world_binding::estimate_f0_with_observer(
+            estimator,
+            samples,
+            sample_rate,
+            &options,
+            observer,
+        )
+        .map_err(|error| GeneratorError::Estimation(error.to_string()))?;
         Ok(F0Track {
             frame_period_ms: track.frame_period_ms,
             temporal_positions: track.temporal_positions,
@@ -121,14 +134,20 @@ impl F0Estimator for WorldEstimator {
         samples: &[f64],
         sample_rate: u32,
         track: &mut F0Track,
+        observer: Option<&dyn FrameObserver>,
     ) -> Result<(), GeneratorError> {
         let mut world_track = kirafrq_world_binding::F0Track {
             frame_period_ms: track.frame_period_ms,
             temporal_positions: std::mem::take(&mut track.temporal_positions),
             f0_hz: std::mem::take(&mut track.f0_hz),
         };
-        kirafrq_world_binding::refine_f0_stonemask(samples, sample_rate, &mut world_track)
-            .map_err(|error| GeneratorError::Estimation(error.to_string()))?;
+        kirafrq_world_binding::refine_f0_stonemask_with_observer(
+            samples,
+            sample_rate,
+            &mut world_track,
+            observer,
+        )
+        .map_err(|error| GeneratorError::Estimation(error.to_string()))?;
         track.temporal_positions = world_track.temporal_positions;
         track.f0_hz = world_track.f0_hz;
         Ok(())
@@ -210,6 +229,19 @@ impl FileReport {
 /// for wavs that contributed an mrq entry.
 pub trait Progress: Send + Sync {
     fn file_started(&self, _wav: &Path) {}
+    /// Whether the reporter wants determinate per-file progress (#34). Only
+    /// reporters that surface it opt in, so everyone else skips the hook
+    /// entirely and pays no overhead.
+    fn wants_file_progress(&self) -> bool {
+        false
+    }
+    /// One wav's analysis fraction, in permille: `done` of `total` (= 1000).
+    /// The pipeline composes the estimate and refine phases and latches each,
+    /// so the pair never moves backwards; the analysis owns the first 90%
+    /// and the write phase the last 10%, one share per selected target
+    /// credited as that target's outcome lands (an mrq contribution credits
+    /// at its folder merge). Wavs that skip analysis emit no event.
+    fn file_progress(&self, _wav: &Path, _done: u64, _total: u64) {}
     fn file_finished(&self, _report: &FileReport) {}
     fn folder_finished(&self, _folder: &Path) {}
     fn finished(&self, _summary: &RunSummary) {}

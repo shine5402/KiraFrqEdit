@@ -22,12 +22,28 @@ impl Default for F0Options {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct F0Track {
     pub frame_period_ms: f64,
     pub temporal_positions: Vec<f64>,
     pub f0_hz: Vec<f64>,
+}
+
+/// Which analysis pass a frame-progress report belongs to (#34): estimation
+/// and StoneMask refinement each walk their own frame grid, so the pipeline
+/// composes the two instead of chaining them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressStage {
+    Estimate,
+    Refine,
+}
+
+/// Optional frame-progress observer (#34): one frames-done/frames-total
+/// report per step, each naming its pass total. `Send + Sync` so worker
+/// threads can report through it; kept separate from the run reporter so the
+/// estimator never learns about wav paths.
+pub trait FrameObserver: Send + Sync {
+    fn report(&self, stage: ProgressStage, done: usize, total: usize);
 }
 
 impl F0Track {
@@ -76,8 +92,21 @@ pub fn estimate_f0(
     sample_rate: u32,
     options: &F0Options,
 ) -> Result<F0Track, WorldError> {
+    estimate_f0_with_observer(estimator, samples, sample_rate, options, None)
+}
+
+/// [`estimate_f0`] with frame progress: when `observer` is present the
+/// vendored loops report through it and the C hook is installed only for the
+/// call; `None` means no reporting and no added overhead.
+pub fn estimate_f0_with_observer(
+    estimator: Estimator,
+    samples: &[f64],
+    sample_rate: u32,
+    options: &F0Options,
+    observer: Option<&dyn FrameObserver>,
+) -> Result<F0Track, WorldError> {
     validate(samples, sample_rate, options)?;
-    sys::analyze(estimator, samples, sample_rate, options)
+    sys::analyze(estimator, samples, sample_rate, options, observer)
 }
 
 pub fn refine_f0_stonemask(
@@ -85,13 +114,24 @@ pub fn refine_f0_stonemask(
     sample_rate: u32,
     track: &mut F0Track,
 ) -> Result<(), WorldError> {
+    refine_f0_stonemask_with_observer(samples, sample_rate, track, None)
+}
+
+/// [`refine_f0_stonemask`] with frame progress; `None` means no reporting and
+/// no added overhead.
+pub fn refine_f0_stonemask_with_observer(
+    samples: &[f64],
+    sample_rate: u32,
+    track: &mut F0Track,
+    observer: Option<&dyn FrameObserver>,
+) -> Result<(), WorldError> {
     if samples.is_empty() {
         return Err(WorldError::EmptyInput);
     }
     if sample_rate == 0 {
         return Err(WorldError::InvalidSampleRate);
     }
-    sys::refine_stonemask(samples, sample_rate, track)
+    sys::refine_stonemask(samples, sample_rate, track, observer)
 }
 
 fn validate(samples: &[f64], sample_rate: u32, options: &F0Options) -> Result<(), WorldError> {

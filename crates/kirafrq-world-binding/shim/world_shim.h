@@ -21,6 +21,14 @@ void kfw_stonemask(const double *x, int x_length, int fs,
                    const double *temporal_positions, const double *f0,
                    int f0_length, double *refined_f0);
 
+// Frame-progress hook (#34): installed around one analysis call on the
+// calling thread; the vendored loops call it with (stage, done, total).
+// Must match kfw_progress_hook_fn in progress_hook.h.
+typedef void (*kfw_progress_callback)(void *ctx, int stage, int done,
+    int total);
+void kfw_install_progress_hook(kfw_progress_callback hook, void *ctx);
+void kfw_clear_progress_hook(void);
+
 #ifdef __cplusplus
 }
 #endif

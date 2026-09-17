@@ -15,6 +15,9 @@
 #include "world/fft.h"
 #include "world/matlabfunctions.h"
 
+// #34 (patched): progress-hook declaration; see patches/0001-progress.patch.
+#include "progress_hook.h"
+
 namespace {
 //-----------------------------------------------------------------------------
 // GetBaseIndex() calculates the temporal positions for windowing.
@@ -212,7 +215,10 @@ static double GetRefinedF0(const double *x, int x_length, int fs,
 void StoneMask(const double *x, int x_length, int fs,
     const double *temporal_positions, const double *f0, int f0_length,
     double *refined_f0) {
-  for (int i = 0; i < f0_length; i++)
+  for (int i = 0; i < f0_length; i++) {
     refined_f0[i] =
       GetRefinedF0(x, x_length, fs, temporal_positions[i], f0[i]);
+    // #34 (patched): frame progress; increment plus call only.
+    kfw_report_progress(KFW_STAGE_REFINE, i + 1, f0_length);
+  }
 }

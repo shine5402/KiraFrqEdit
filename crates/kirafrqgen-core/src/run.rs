@@ -12,11 +12,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kirafrq_audio as audio;
 use kirafrq_formats::{FrequencyTable, frq, mrq, pmk};
+use kirafrq_world_binding::{FrameObserver, ProgressStage};
 use rayon::prelude::*;
 
 use crate::paths;
@@ -154,6 +155,41 @@ impl FolderDescs {
     }
 }
 
+/// One wav's frame-progress observer (#34): composes the estimate and refine
+/// phases into a single permille fraction so the indicator never jumps back
+/// when refinement starts. Each phase is latched at its high-water mark; the
+/// analysis owns the first 90% of the file (estimation the first half of
+/// that, refinement the second), and the write phase owns the last 10%: the
+/// pipeline emits the terminal 1000 once the wav's tables are written.
+struct FileObserver<'a> {
+    progress: &'a dyn Progress,
+    wav: PathBuf,
+    refine: bool,
+    estimate: AtomicU64,
+    refined: AtomicU64,
+}
+
+impl FrameObserver for FileObserver<'_> {
+    fn report(&self, stage: ProgressStage, done: usize, total: usize) {
+        if total == 0 {
+            return;
+        }
+        let permille = (done.min(total) as u64 * 1000 / total as u64).min(1000);
+        let slot = match stage {
+            ProgressStage::Estimate => &self.estimate,
+            ProgressStage::Refine => &self.refined,
+        };
+        slot.fetch_max(permille, Ordering::Relaxed);
+        let estimate = self.estimate.load(Ordering::Relaxed);
+        let done = if self.refine {
+            (estimate + self.refined.load(Ordering::Relaxed)) * 9 / 20
+        } else {
+            estimate * 9 / 10
+        };
+        self.progress.file_progress(&self.wav, done, 1000);
+    }
+}
+
 /// Process one wav through the whole phase-A pipeline. Fires `file_started`
 /// on entry and `file_finished` on exit unless the wav owes an mrq
 /// contribution (phase B then owns its final report).
@@ -200,16 +236,32 @@ fn process_wav(
     };
     report.warnings.extend(decoded.warnings);
 
-    let mut track = match estimator.estimate(&decoded.samples, SAMPLE_RATE, frame_period_ms()) {
-        Ok(track) => track,
-        Err(error) => {
-            report.failures.push(error.to_string());
-            progress.file_finished(&report);
-            return WavResult { report, mrq: None };
-        }
-    };
+    // One observer across both phases: the estimate latch carries into the
+    // refine half, so the composed fraction never jumps back. Reporters that
+    // ignore progress skip the hook entirely (#34).
+    let observer = progress.wants_file_progress().then(|| FileObserver {
+        progress,
+        wav: wav.to_path_buf(),
+        refine: opts.f0.stone_mask,
+        estimate: AtomicU64::new(0),
+        refined: AtomicU64::new(0),
+    });
+    let probe = observer
+        .as_ref()
+        .map(|observer| observer as &dyn FrameObserver);
+
+    let mut track =
+        match estimator.estimate(&decoded.samples, SAMPLE_RATE, frame_period_ms(), probe) {
+            Ok(track) => track,
+            Err(error) => {
+                report.failures.push(error.to_string());
+                progress.file_finished(&report);
+                return WavResult { report, mrq: None };
+            }
+        };
     if opts.f0.stone_mask
-        && let Err(error) = estimator.refine_stonemask(&decoded.samples, SAMPLE_RATE, &mut track)
+        && let Err(error) =
+            estimator.refine_stonemask(&decoded.samples, SAMPLE_RATE, &mut track, probe)
     {
         report.failures.push(format!("StoneMask: {error}"));
         progress.file_finished(&report);
@@ -229,11 +281,21 @@ fn process_wav(
     }
 
     let mut mrq_work = None;
+    // The write phase owns the last 10% of the file, one share per selected
+    // target; a share credits when that target's outcome is final (written,
+    // skipped, or staged for the folder merge). The loop below is sequential,
+    // so each credit moves the indicator.
+    let total_units = opts.targets.len() as u64;
+    let mut completed_units = 0u64;
     for target in &opts.targets {
         match target {
             Target::Frq => write_frq(wav, opts, &table, &mut report),
             Target::Pmk => write_pmk(wav, opts, &table, decoded.samples.len(), &mut report),
             Target::Mrq => mrq_work = write_mrq(wav, opts, &table, descs, &mut report),
+        }
+        if *target != Target::Mrq || mrq_work.is_none() {
+            completed_units += 1;
+            progress.file_progress(wav, 900 + completed_units * 100 / total_units, 1000);
         }
     }
 
@@ -393,6 +455,8 @@ fn merge_folder(
         }
     }
     for &index in indices {
+        // The folder merge-write is this wav's write phase (#34).
+        progress.file_progress(&results[index].report.wav, 1000, 1000);
         progress.file_finished(&results[index].report);
     }
 }

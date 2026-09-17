@@ -1,6 +1,29 @@
-use std::os::raw::c_int;
+use std::os::raw::{c_int, c_void};
 
-use crate::{Estimator, F0Options, F0Track, WorldError};
+use crate::{Estimator, F0Options, F0Track, FrameObserver, ProgressStage, WorldError};
+
+/// The C hook installed around one analysis call; `ctx` borrows a
+/// [`HookTarget`] for the call's duration. Never unwinds across the boundary.
+unsafe extern "C" fn report_trampoline(ctx: *mut c_void, stage: c_int, done: c_int, total: c_int) {
+    if ctx.is_null() || done < 0 || total <= 0 {
+        return;
+    }
+    let target = unsafe { &*(ctx as *const HookTarget<'_>) };
+    let stage = if stage == 1 {
+        ProgressStage::Refine
+    } else {
+        ProgressStage::Estimate
+    };
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        target.observer.report(stage, done as usize, total as usize);
+    }));
+}
+
+/// Thin carrier for the observer reference: a `&dyn FrameObserver` is fat and
+/// cannot cross the C boundary, so the hook gets a pointer to this instead.
+struct HookTarget<'a> {
+    observer: &'a dyn FrameObserver,
+}
 
 unsafe extern "C" {
     fn kfw_f0_length_dio(fs: c_int, x_length: c_int, frame_period: f64) -> c_int;
@@ -37,6 +60,12 @@ unsafe extern "C" {
         f0_length: c_int,
         refined_f0: *mut f64,
     );
+
+    fn kfw_install_progress_hook(
+        hook: unsafe extern "C" fn(*mut c_void, c_int, c_int, c_int),
+        ctx: *mut c_void,
+    );
+    fn kfw_clear_progress_hook();
 }
 
 fn to_c_int(value: usize, error: WorldError) -> Result<c_int, WorldError> {
@@ -48,6 +77,7 @@ pub(crate) fn analyze(
     samples: &[f64],
     sample_rate: u32,
     options: &F0Options,
+    observer: Option<&dyn FrameObserver>,
 ) -> Result<F0Track, WorldError> {
     let x_length = to_c_int(samples.len(), WorldError::TooLong)?;
     let fs = to_c_int(sample_rate as usize, WorldError::InvalidSampleRate)?;
@@ -66,7 +96,13 @@ pub(crate) fn analyze(
     let mut f0_hz = vec![0.0f64; expected as usize];
 
     let actual = unsafe {
-        match estimator {
+        // The hook lives on this thread only, for this call only; the
+        // analysis runs synchronously between install and clear.
+        if let Some(observer) = observer {
+            let target = HookTarget { observer };
+            kfw_install_progress_hook(report_trampoline, std::ptr::addr_of!(target) as *mut c_void);
+        }
+        let actual = match estimator {
             Estimator::Dio => kfw_dio(
                 samples.as_ptr(),
                 x_length,
@@ -87,7 +123,9 @@ pub(crate) fn analyze(
                 temporal_positions.as_mut_ptr(),
                 f0_hz.as_mut_ptr(),
             ),
-        }
+        };
+        kfw_clear_progress_hook();
+        actual
     };
     if actual <= 0 || actual as usize > temporal_positions.len() {
         return Err(WorldError::AnalysisFailed);
@@ -106,6 +144,7 @@ pub(crate) fn refine_stonemask(
     samples: &[f64],
     sample_rate: u32,
     track: &mut F0Track,
+    observer: Option<&dyn FrameObserver>,
 ) -> Result<(), WorldError> {
     let x_length = to_c_int(samples.len(), WorldError::TooLong)?;
     let fs = to_c_int(sample_rate as usize, WorldError::InvalidSampleRate)?;
@@ -116,6 +155,10 @@ pub(crate) fn refine_stonemask(
 
     let mut refined_f0 = vec![0.0f64; track.f0_hz.len()];
     unsafe {
+        if let Some(observer) = observer {
+            let target = HookTarget { observer };
+            kfw_install_progress_hook(report_trampoline, std::ptr::addr_of!(target) as *mut c_void);
+        }
         kfw_stonemask(
             samples.as_ptr(),
             x_length,
@@ -125,6 +168,7 @@ pub(crate) fn refine_stonemask(
             f0_length,
             refined_f0.as_mut_ptr(),
         );
+        kfw_clear_progress_hook();
     }
     track.f0_hz = refined_f0;
     Ok(())
