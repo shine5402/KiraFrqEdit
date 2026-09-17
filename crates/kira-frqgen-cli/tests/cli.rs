@@ -170,11 +170,21 @@ fn usage_errors_exit_2_with_an_empty_stdout() {
 #[test]
 fn help_and_version_print_to_stdout_and_exit_0() {
     let scratch = Scratch::new("help");
-    for args in [&["--help"][..], &["-V"][..]] {
-        let run = kira(&scratch.0, args);
-        assert_eq!(run.code, 0, "args {args:?}: {}", run.stderr);
-        assert!(!run.stdout.is_empty(), "args {args:?}: {}", run.stderr);
-    }
+    let help = kira(&scratch.0, &["--help"]);
+    assert_eq!(help.code, 0, "{}", help.stderr);
+    assert!(
+        help.stdout
+            .contains("Bulk-generate frq tables for your UTAU voicebank."),
+        "{}",
+        help.stdout
+    );
+
+    let version = kira(&scratch.0, &["-V"]);
+    assert_eq!(version.code, 0, "{}", version.stderr);
+    assert_eq!(
+        version.stdout.trim(),
+        format!("kira-frqgen {}", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 // --- fatal input errors -----------------------------------------------------

@@ -1816,7 +1816,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kira-frq-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "encoding_rs",
  "hound",
@@ -1825,7 +1825,7 @@ dependencies = [
 
 [[package]]
 name = "kira-frq-world"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "cc",
  "hound",
@@ -1833,7 +1833,7 @@ dependencies = [
 
 [[package]]
 name = "kira-frqgen"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "hound",
  "kira-frq-core",
@@ -1843,7 +1843,7 @@ dependencies = [
 
 [[package]]
 name = "kira-frqgen-cli"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "clap",
  "ctrlc",
@@ -1854,7 +1854,7 @@ dependencies = [
 
 [[package]]
 name = "kira-frqgen-gui"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "eframe",
  "kira-frqgen",

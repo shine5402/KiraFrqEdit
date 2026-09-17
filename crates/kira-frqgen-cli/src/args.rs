@@ -6,9 +6,13 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 use kira_frqgen::{Estimator, F0Config, Target};
 
-/// Generate UTAU frequency tables with WORLD.
+/// Bulk-generate frq tables for your UTAU voicebank.
 #[derive(Debug, Parser)]
-#[command(name = "kira-frqgen", version)]
+#[command(
+    name = "kira-frqgen",
+    version,
+    about = "Bulk-generate frq tables for your UTAU voicebank."
+)]
 pub struct Cli {
     /// A voicebank folder (recursive scan) or a single .wav file.
     #[arg(value_name = "PATH")]
