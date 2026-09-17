@@ -149,6 +149,16 @@ impl Progress for GuiProgress {
         self.ctx.request_repaint();
     }
 
+    fn wants_file_progress(&self) -> bool {
+        // The run view draws the determinate pie (#33/#34).
+        true
+    }
+
+    fn file_progress(&self, wav: &Path, done: u64, total: u64) {
+        lock(&self.state).progressed(wav, done, total);
+        self.ctx.request_repaint();
+    }
+
     fn file_finished(&self, report: &FileReport) {
         lock(&self.state).finished_file(report);
         self.ctx.request_repaint();
@@ -1020,7 +1030,7 @@ fn run_row(ui: &mut egui::Ui, row: &Row, root: &Path, time: f64) {
     };
     let (color, text) = match &row.status {
         Status::Pending => (ui.visuals().weak_text_color(), "pending".to_owned()),
-        Status::Running => (ui.visuals().text_color(), "working…".to_owned()),
+        Status::Running { .. } => (ui.visuals().text_color(), "working…".to_owned()),
         Status::Written(targets) => (
             ui.visuals().text_color(),
             format!("wrote {}", target_names(targets)),
@@ -1041,9 +1051,19 @@ fn run_row(ui: &mut egui::Ui, row: &Row, root: &Path, time: f64) {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
             match &row.status {
                 Status::Pending => {
-                    progress_ring(ui, rect);
+                    progress_spinner(ui, rect, time);
                 }
-                Status::Running => progress_spinner(ui, rect, time),
+                Status::Running { permille } => match permille {
+                    // No frame event yet: spin like a pending row. Once the
+                    // fraction lands the wedge takes over (#33/#34).
+                    None => progress_spinner(ui, rect, time),
+                    Some(permille) => progress_pie(
+                        ui,
+                        rect,
+                        PIE_TOP,
+                        *permille as f32 / 1000.0 * std::f32::consts::TAU,
+                    ),
+                },
                 Status::Written(_) => {
                     status_glyph(ui, rect, icons::CHECK, ui.visuals().text_color())
                 }
@@ -1122,20 +1142,11 @@ fn dashed_border(painter: &egui::Painter, rect: egui::Rect, stroke: Stroke, dash
     }
 }
 
-/// The empty ring a pending row shows; returns its centre and radius for the
-/// spinner to draw over.
-fn progress_ring(ui: &egui::Ui, rect: egui::Rect) -> (egui::Pos2, f32) {
-    let center = rect.center();
-    let radius = rect.width() * 0.5 - 1.0;
-    let ring = ui.visuals().weak_text_color().gamma_multiply(0.6);
-    ui.painter()
-        .circle_stroke(center, radius, Stroke::new(1.5, ring));
-    (center, radius)
-}
-
+/// The indeterminate spinner: faint filled disc plus the accent arc rotating
+/// with the clock. No ring anywhere (#33).
 fn progress_spinner(ui: &egui::Ui, rect: egui::Rect, time: f64) {
-    let (center, radius) = progress_ring(ui, rect);
-    let fill = ui.visuals().selection.bg_fill;
+    let (center, radius) = progress_disc(ui, rect);
+    let arc = ui.visuals().selection.bg_fill;
     let painter = ui.painter();
     let start = (time * 2.4).rem_euclid(std::f64::consts::TAU) as f32;
     let sweep = 1.7_f32;
@@ -1143,26 +1154,23 @@ fn progress_spinner(ui: &egui::Ui, rect: egui::Rect, time: f64) {
     let points: Vec<egui::Pos2> = (0..=segments)
         .map(|index| {
             let angle = start + sweep * (index as f32 / segments as f32);
-            center + Vec2::new(angle.cos(), angle.sin()) * (radius - 1.0)
+            center + Vec2::new(angle.cos(), angle.sin()) * (radius - 1.5)
         })
         .collect();
-    painter.add(Shape::line(points, Stroke::new(1.8, fill)));
+    painter.add(Shape::line(points, Stroke::new(1.8, arc)));
 }
 
-// ------------------------------------------------------------ pie (for #34)
+// ------------------------------------------------------------ pie (#33/#34)
 //
-// Strokeless progress pie, kept ahead of the real frame fractions (#34):
-// until a row reports a fraction there is nothing to show, so pending rows
-// keep `progress_ring` and running rows keep `progress_spinner` above. #34
-// will call `progress_pie` with `PIE_TOP` and `fraction * TAU`.
+// Strokeless determinate indicator: the disc above plus a filled accent wedge
+// whose sweep is the wav's composed frame fraction. Rows with no fraction
+// keep the spinner above, so no wedge is ever drawn without progress.
 
 /// 12 o'clock on screen (y down): angle `-PI/2`. Larger angles run clockwise,
 /// so a wedge from `PIE_TOP` with a positive sweep grows clockwise from the top.
-#[allow(dead_code)]
 const PIE_TOP: f32 = -std::f32::consts::FRAC_PI_2;
 
 /// The faint filled disc behind the wedge.
-#[allow(dead_code)]
 fn progress_disc(ui: &egui::Ui, rect: egui::Rect) -> (egui::Pos2, f32) {
     let center = rect.center();
     let radius = rect.width() * 0.5;
@@ -1173,7 +1181,6 @@ fn progress_disc(ui: &egui::Ui, rect: egui::Rect) -> (egui::Pos2, f32) {
 
 /// Triangle fan for a wedge sweeping `sweep` radians clockwise from `start` on
 /// screen (y down): the centre followed by one rim point per segment step.
-#[allow(dead_code)]
 fn wedge_points(
     center: egui::Pos2,
     radius: f32,
@@ -1195,7 +1202,6 @@ fn wedge_points(
 
 /// Strokeless pie: faint filled disc plus a filled accent wedge sweeping
 /// clockwise from 12 o'clock. A zero sweep leaves the disc alone.
-#[allow(dead_code)]
 fn progress_pie(ui: &egui::Ui, rect: egui::Rect, start: f32, sweep: f32) {
     let (center, radius) = progress_disc(ui, rect);
     if sweep <= 0.0 {

@@ -14,6 +14,9 @@
 #include "world/fft.h"
 #include "world/matlabfunctions.h"
 
+// #34 (patched): progress-hook declaration; see patches/0001-progress.patch.
+#include "progress_hook.h"
+
 //-----------------------------------------------------------------------------
 // struct for RawEventByHarvest()
 // "negative" means "zero-crossing point going from positive to negative"
@@ -336,10 +339,13 @@ static void GetRawF0Candidates(const double *boundary_f0_list,
     const double *temporal_positions, int f0_length,
     const fft_complex *y_spectrum, int fft_size, double f0_floor,
     double f0_ceil, double **raw_f0_candidates) {
-  for (int i = 0; i < number_of_bands; ++i)
+  for (int i = 0; i < number_of_bands; ++i) {
     GetF0CandidateFromRawEvent(boundary_f0_list[i], actual_fs, y_spectrum,
         y_length, fft_size, f0_floor, f0_ceil, temporal_positions, f0_length,
         raw_f0_candidates[i]);
+    // #34 (patched): one candidate pass done; increment plus call only.
+    kfw_report_progress(KFW_STAGE_ESTIMATE, i + 1, number_of_bands);
+  }
 }
 
 //-----------------------------------------------------------------------------

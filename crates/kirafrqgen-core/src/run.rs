@@ -12,11 +12,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kirafrq_audio as audio;
 use kirafrq_formats::{FrequencyTable, frq, mrq, pmk};
+use kirafrq_world_binding::{FrameObserver, ProgressStage};
 use rayon::prelude::*;
 
 use crate::paths;
@@ -154,6 +155,40 @@ impl FolderDescs {
     }
 }
 
+/// One wav's frame-progress observer (#34): composes the estimate and refine
+/// phases into a single permille fraction so the indicator never jumps back
+/// when refinement starts. Each phase is latched at its high-water mark;
+/// estimation owns the first half of the file and refinement the second, or
+/// the whole file when StoneMask is off.
+struct FileObserver<'a> {
+    progress: &'a dyn Progress,
+    wav: PathBuf,
+    refine: bool,
+    estimate: AtomicU64,
+    refined: AtomicU64,
+}
+
+impl FrameObserver for FileObserver<'_> {
+    fn report(&self, stage: ProgressStage, done: usize, total: usize) {
+        if total == 0 {
+            return;
+        }
+        let permille = (done.min(total) as u64 * 1000 / total as u64).min(1000);
+        let slot = match stage {
+            ProgressStage::Estimate => &self.estimate,
+            ProgressStage::Refine => &self.refined,
+        };
+        slot.fetch_max(permille, Ordering::Relaxed);
+        let estimate = self.estimate.load(Ordering::Relaxed);
+        let done = if self.refine {
+            (estimate + self.refined.load(Ordering::Relaxed)) / 2
+        } else {
+            estimate
+        };
+        self.progress.file_progress(&self.wav, done, 1000);
+    }
+}
+
 /// Process one wav through the whole phase-A pipeline. Fires `file_started`
 /// on entry and `file_finished` on exit unless the wav owes an mrq
 /// contribution (phase B then owns its final report).
@@ -200,16 +235,32 @@ fn process_wav(
     };
     report.warnings.extend(decoded.warnings);
 
-    let mut track = match estimator.estimate(&decoded.samples, SAMPLE_RATE, frame_period_ms()) {
-        Ok(track) => track,
-        Err(error) => {
-            report.failures.push(error.to_string());
-            progress.file_finished(&report);
-            return WavResult { report, mrq: None };
-        }
-    };
+    // One observer across both phases: the estimate latch carries into the
+    // refine half, so the composed fraction never jumps back. Reporters that
+    // ignore progress skip the hook entirely (#34).
+    let observer = progress.wants_file_progress().then(|| FileObserver {
+        progress,
+        wav: wav.to_path_buf(),
+        refine: opts.f0.stone_mask,
+        estimate: AtomicU64::new(0),
+        refined: AtomicU64::new(0),
+    });
+    let probe = observer
+        .as_ref()
+        .map(|observer| observer as &dyn FrameObserver);
+
+    let mut track =
+        match estimator.estimate(&decoded.samples, SAMPLE_RATE, frame_period_ms(), probe) {
+            Ok(track) => track,
+            Err(error) => {
+                report.failures.push(error.to_string());
+                progress.file_finished(&report);
+                return WavResult { report, mrq: None };
+            }
+        };
     if opts.f0.stone_mask
-        && let Err(error) = estimator.refine_stonemask(&decoded.samples, SAMPLE_RATE, &mut track)
+        && let Err(error) =
+            estimator.refine_stonemask(&decoded.samples, SAMPLE_RATE, &mut track, probe)
     {
         report.failures.push(format!("StoneMask: {error}"));
         progress.file_finished(&report);

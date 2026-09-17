@@ -1,8 +1,27 @@
 #include "world_shim.h"
 
+#include <type_traits>
+
+#include "progress_hook.h"
 #include "world/dio.h"
 #include "world/harvest.h"
 #include "world/stonemask.h"
+
+static_assert(std::is_same<kfw_progress_callback, kfw_progress_hook_fn>::value,
+    "the shim header and the hook header must agree on the callback type");
+
+thread_local kfw_progress_hook_fn kfw_progress_hook = nullptr;
+thread_local void *kfw_progress_hook_ctx = nullptr;
+
+void kfw_install_progress_hook(kfw_progress_callback hook, void *ctx) {
+  kfw_progress_hook = hook;
+  kfw_progress_hook_ctx = ctx;
+}
+
+void kfw_clear_progress_hook(void) {
+  kfw_progress_hook = nullptr;
+  kfw_progress_hook_ctx = nullptr;
+}
 
 int kfw_f0_length_dio(int fs, int x_length, double frame_period) {
   return GetSamplesForDIO(fs, x_length, frame_period);

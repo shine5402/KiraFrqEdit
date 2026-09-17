@@ -13,6 +13,7 @@ fn main() {
     build
         .cpp(true)
         .include(world_src)
+        .include("shim")
         .warnings(false)
         .flag_if_supported("/EHsc");
     for source in sources {
@@ -26,6 +27,7 @@ fn main() {
     println!("cargo:rerun-if-changed={world_src}");
     println!("cargo:rerun-if-changed=shim/world_shim.cpp");
     println!("cargo:rerun-if-changed=shim/world_shim.h");
+    println!("cargo:rerun-if-changed=shim/progress_hook.h");
     // The toolchain selection above reads these.
     println!("cargo:rerun-if-env-changed=CC");
     println!("cargo:rerun-if-env-changed=CXX");

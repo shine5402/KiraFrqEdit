@@ -13,6 +13,9 @@
 #include "world/constantnumbers.h"
 #include "world/matlabfunctions.h"
 
+// #34 (patched): progress-hook declaration; see patches/0001-progress.patch.
+#include "progress_hook.h"
+
 //-----------------------------------------------------------------------------
 // struct for GetFourZeroCrossingIntervals()
 // "negative" means "zero-crossing point going from positive to negative"
@@ -122,6 +125,8 @@ static void GetBestF0Contour(int f0_length,
         best_f0_contour[i] = f0_candidates[j][i];
       }
     }
+    // #34 (patched): frame progress; increment plus call only.
+    kfw_report_progress(KFW_STAGE_ESTIMATE, i + 1, f0_length);
   }
 }
 

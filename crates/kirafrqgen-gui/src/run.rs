@@ -11,9 +11,12 @@ use kirafrqgen_core::{FileReport, RunSummary, Target};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
     Pending,
-    /// The pipeline is decoding, estimating or writing; no per-file progress
-    /// event exists, so the icon is indeterminate.
-    Running,
+    /// The pipeline is decoding, estimating or writing. `permille` is the
+    /// wav's composed analysis fraction (#34: `Some(0..=1000)`) once frame
+    /// events arrive; `None` beforehand, while the icon spins indeterminate.
+    Running {
+        permille: Option<u32>,
+    },
     Written(BTreeSet<Target>),
     Failed(Vec<String>),
     /// Nothing written and nothing failed: the tables existed, or the wav was
@@ -45,7 +48,7 @@ impl Status {
 
     /// No longer pending or running.
     pub fn is_resolved(&self) -> bool {
-        !matches!(self, Status::Pending | Status::Running)
+        !matches!(self, Status::Pending | Status::Running { .. })
     }
 }
 
@@ -101,7 +104,21 @@ impl RunState {
     /// `Progress::file_started`: mark the wav's row running.
     pub fn started(&mut self, wav: &Path) {
         if let Some(&row) = self.index.get(wav) {
-            self.rows[row].status = Status::Running;
+            self.rows[row].status = Status::Running { permille: None };
+        }
+    }
+
+    /// `Progress::file_progress`: latch the running row's fraction. Events
+    /// for unknown or already-resolved rows are ignored.
+    pub fn progressed(&mut self, wav: &Path, done: u64, total: u64) {
+        if total == 0 {
+            return;
+        }
+        let permille = ((done.min(total) * 1000 / total).min(1000)) as u32;
+        if let Some(&row) = self.index.get(wav)
+            && let Status::Running { permille: slot } = &mut self.rows[row].status
+        {
+            *slot = Some(permille);
         }
     }
 
@@ -171,12 +188,25 @@ impl RunState {
         self.rows.len()
     }
 
-    /// Overall progress; an empty run counts as complete.
+    /// Overall progress: resolved rows plus the in-flight fraction of each
+    /// running row (#34), so the bar moves within a wav; an empty run counts
+    /// as complete.
     pub fn fraction(&self) -> f32 {
         if self.rows.is_empty() {
             1.0
         } else {
-            self.resolved() as f32 / self.rows.len() as f32
+            let done: f32 = self
+                .rows
+                .iter()
+                .map(|row| match &row.status {
+                    Status::Running {
+                        permille: Some(permille),
+                    } => *permille as f32 / 1000.0,
+                    Status::Running { permille: None } | Status::Pending => 0.0,
+                    _ => 1.0,
+                })
+                .sum();
+            done / self.rows.len() as f32
         }
     }
 }
@@ -204,7 +234,7 @@ mod tests {
         state.started(Path::new("/bank/A2.wav"));
         assert_eq!(
             state.rows()[0].status,
-            Status::Running,
+            Status::Running { permille: None },
             "started marks the row running"
         );
         assert_eq!(state.resolved(), 0, "running is not resolved");
@@ -318,5 +348,62 @@ mod tests {
         let state = RunState::new(Vec::new());
         assert_eq!(state.total(), 0);
         assert_eq!(state.fraction(), 1.0);
+    }
+
+    #[test]
+    fn in_flight_fractions_move_the_row_and_the_bar() {
+        let mut state = state(&["/bank/A2.wav", "/bank/A3.wav"]);
+        state.started(Path::new("/bank/A2.wav"));
+        state.started(Path::new("/bank/A3.wav"));
+
+        state.progressed(Path::new("/bank/A2.wav"), 500, 1000);
+        assert_eq!(
+            state.rows()[0].status,
+            Status::Running {
+                permille: Some(500)
+            }
+        );
+        assert_eq!(state.fraction(), 0.25);
+
+        let mut written = report("/bank/A2.wav");
+        written.written.insert(Target::Frq);
+        state.finished_file(&written);
+        assert_eq!(state.fraction(), 0.5, "a resolved row counts whole");
+    }
+
+    #[test]
+    fn progress_for_unknown_or_resolved_rows_is_ignored() {
+        let mut state = state(&["/bank/A2.wav"]);
+
+        state.progressed(Path::new("/bank/zz.wav"), 500, 1000);
+        state.progressed(Path::new("/bank/A2.wav"), 500, 1000);
+        assert_eq!(state.rows()[0].status, Status::Pending);
+        assert_eq!(state.fraction(), 0.0);
+
+        state.started(Path::new("/bank/A2.wav"));
+        state.progressed(Path::new("/bank/A2.wav"), 1, 0);
+        assert_eq!(
+            state.rows()[0].status,
+            Status::Running { permille: None },
+            "a zero total carries no fraction"
+        );
+
+        state.progressed(Path::new("/bank/A2.wav"), 2000, 1000);
+        assert_eq!(
+            state.rows()[0].status,
+            Status::Running {
+                permille: Some(1000)
+            },
+            "an overshooting count clamps at complete"
+        );
+
+        let mut written = report("/bank/A2.wav");
+        written.written.insert(Target::Frq);
+        state.finished_file(&written);
+        state.progressed(Path::new("/bank/A2.wav"), 100, 1000);
+        assert!(
+            matches!(state.rows()[0].status, Status::Written(_)),
+            "late events never reopen a resolved row"
+        );
     }
 }
