@@ -157,9 +157,10 @@ impl FolderDescs {
 
 /// One wav's frame-progress observer (#34): composes the estimate and refine
 /// phases into a single permille fraction so the indicator never jumps back
-/// when refinement starts. Each phase is latched at its high-water mark;
-/// estimation owns the first half of the file and refinement the second, or
-/// the whole file when StoneMask is off.
+/// when refinement starts. Each phase is latched at its high-water mark; the
+/// analysis owns the first 90% of the file (estimation the first half of
+/// that, refinement the second), and the write phase owns the last 10%: the
+/// pipeline emits the terminal 1000 once the wav's tables are written.
 struct FileObserver<'a> {
     progress: &'a dyn Progress,
     wav: PathBuf,
@@ -181,9 +182,9 @@ impl FrameObserver for FileObserver<'_> {
         slot.fetch_max(permille, Ordering::Relaxed);
         let estimate = self.estimate.load(Ordering::Relaxed);
         let done = if self.refine {
-            (estimate + self.refined.load(Ordering::Relaxed)) / 2
+            (estimate + self.refined.load(Ordering::Relaxed)) * 9 / 20
         } else {
-            estimate
+            estimate * 9 / 10
         };
         self.progress.file_progress(&self.wav, done, 1000);
     }
@@ -289,6 +290,8 @@ fn process_wav(
     }
 
     if mrq_work.is_none() {
+        // The analysis composed the first 90%; the writes own the last 10%.
+        progress.file_progress(wav, 1000, 1000);
         progress.file_finished(&report);
     }
     WavResult {
@@ -444,6 +447,8 @@ fn merge_folder(
         }
     }
     for &index in indices {
+        // The folder merge-write is this wav's write phase (#34).
+        progress.file_progress(&results[index].report.wav, 1000, 1000);
         progress.file_finished(&results[index].report);
     }
 }

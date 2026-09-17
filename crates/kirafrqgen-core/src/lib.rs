@@ -237,8 +237,9 @@ pub trait Progress: Send + Sync {
     }
     /// One wav's analysis fraction, in permille: `done` of `total` (= 1000).
     /// The pipeline composes the estimate and refine phases and latches each,
-    /// so the pair never moves backwards and `done == total` marks the
-    /// analysis complete. Wavs that skip analysis emit no event.
+    /// so the pair never moves backwards; the analysis owns the first 90%
+    /// and the terminal 1000 fires once the wav's tables are written. Wavs
+    /// that skip analysis emit no event.
     fn file_progress(&self, _wav: &Path, _done: u64, _total: u64) {}
     fn file_finished(&self, _report: &FileReport) {}
     fn folder_finished(&self, _folder: &Path) {}

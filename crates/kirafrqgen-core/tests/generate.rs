@@ -1066,10 +1066,30 @@ fn file_progress_composes_estimate_and_refine_into_one_permille() {
         .filter(|(path, _, _)| *path == wav)
         .map(|(_, done, _)| *done)
         .collect();
-    // Estimate owns the first half, refinement the second; latched, so the
-    // sequence never moves backwards and ends complete.
-    assert_eq!(fractions, [125, 250, 375, 500, 625, 750, 875, 1000]);
+    // The analysis owns the first 90% (estimate the first half of that,
+    // refinement the second), latched so the sequence never moves backwards;
+    // the terminal 1000 fires once the tables are written.
+    assert_eq!(fractions, [112, 225, 337, 450, 562, 675, 787, 900, 1000]);
     assert!(events.iter().all(|(_, _, total)| *total == 1000));
+}
+
+#[test]
+fn file_progress_without_stonemask_gives_estimate_the_whole_analysis() {
+    let scratch = Scratch::new("file-progress-no-refine");
+    let wav = write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.stone_mask = false;
+    let progress = ProgressTape::default();
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+    generate(&opts, &ScriptedEstimator, &progress, &cancel).unwrap();
+
+    let events = progress.events.lock().unwrap();
+    let fractions: Vec<u64> = events
+        .iter()
+        .filter(|(path, _, _)| *path == wav)
+        .map(|(_, done, _)| *done)
+        .collect();
+    assert_eq!(fractions, [225, 450, 675, 900, 1000]);
 }
 
 #[test]
