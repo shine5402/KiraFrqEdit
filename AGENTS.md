@@ -26,7 +26,8 @@ outputs wrong pitch, glitches and pops.
 ## Status
 
 - 2026-09: research phase done; workspace scaffold landed (#15): five crates under `crates/`,
-  WORLD vendored under `third_party/World`, clang-family CI and tag-triggered CD under
+  WORLD vendored under `third_party/World`, per-platform compiler CI (clang-cl / Apple clang /
+  gcc) and tag-triggered CD under
   `.github/workflows/`. Next: the mrq writer (#16); remaining writers and the generation
   pipeline graduate as decision tickets #11–#13 close.
 - Research results live in `docs/research/` (README is the index); format specs were verified
@@ -38,8 +39,8 @@ outputs wrong pitch, glitches and pops.
   `kira-frq-world` (vendored WORLD wrapper), `kira-frqgen` (generation pipeline),
   `kira-frqgen-cli` / `kira-frqgen-gui` (the two binaries).
 - `third_party/World` — vendored WORLD v1.0.1 sources, built by `kira-frq-world`'s `cc` build.
-- `.github/workflows/` — CI on the clang family (Windows clang-cl, macOS Apple clang, Linux
-  clang); CD builds binaries on version tags the same way.
+- `.github/workflows/` — CI with one compiler per platform (Windows clang-cl, macOS Apple
+  clang, Linux gcc); CD builds binaries on version tags the same way.
 - `docs/research/` — research notes and verified format specs; read before touching formats.
 - `docs/agents/` — agent workflow conventions (issue tracker, triage labels, domain docs).
 - `docs/adr/` — architecture decision records, created as decisions are made.

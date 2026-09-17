@@ -1,8 +1,8 @@
 name: CI
 
-# Clang family only, to save CI time (map Notes): clang-cl on Windows, Apple
-# clang on macOS, clang on Linux. MSVC and gcc are expected to keep building
-# too — a failure there is a bug — but they are not CI jobs.
+# One compiler per platform, to save CI time (map Notes): clang-cl on Windows,
+# Apple clang on macOS, gcc on Linux. MSVC is expected to keep building too —
+# a failure there is a bug — but it is not a CI job.
 on:
   push:
     branches: [main]
@@ -24,20 +24,21 @@ jobs:
             os: macos-latest
             cc: clang
             cxx: clang++
-          - name: linux (clang)
+          - name: linux (gcc)
             os: ubuntu-latest
-            cc: clang
-            cxx: clang++
+            cc: gcc
+            cxx: g++
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install clang and Linux GUI build deps
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux GUI build deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
+          sudo apt-get install -y libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
       - name: cargo test
         run: cargo test --workspace --locked
