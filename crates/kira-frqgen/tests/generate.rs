@@ -13,7 +13,7 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use kira_frq_core::{FrequencyTable, frq, mrq};
 use kira_frqgen::{
     CancelToken, F0Estimator, F0Track, FileReport, GenerateOptions, GeneratorError, Progress,
-    RunSummary, Sharing, Target, generate, plan,
+    RunSummary, Sharing, Target, generate, generate_wavs, plan,
 };
 
 /// `8192 / 2^15` = 0.25, so the #8 amplitude of a constant wav is `8192.0`.
@@ -812,6 +812,86 @@ fn a_single_wav_root_is_a_one_file_run() {
     assert_eq!(summary.considered, 1);
     assert_eq!(summary.written, 1);
     assert!(scratch.join("A2_wav.frq").is_file());
+}
+
+// --- explicit file lists (the GUI selection) --------------------------------
+
+#[test]
+fn generate_wavs_processes_only_the_listed_wavs() {
+    let scratch = Scratch::new("list-subset");
+    let a2 = write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 512]);
+    write_wav(&scratch, "A3.wav", mono(), &[SAMPLE; 512]);
+    let estimator = FakeEstimator::new(&[220.0]);
+    let progress = Recording::default();
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+
+    let summary = generate_wavs(
+        &options(&scratch.0, &[Target::Frq]),
+        std::slice::from_ref(&a2),
+        &estimator,
+        &progress,
+        &cancel,
+    )
+    .unwrap();
+
+    assert_eq!(summary.considered, 1);
+    assert_eq!(summary.written, 1);
+    assert_eq!(
+        estimator.calls().len(),
+        1,
+        "only the listed wav is analyzed"
+    );
+    assert_eq!(progress.started_files.lock().unwrap().as_slice(), [a2]);
+    assert!(scratch.join("A2_wav.frq").is_file());
+    assert!(!scratch.join("A3_wav.frq").exists());
+}
+
+#[test]
+fn generate_wavs_merges_mrq_for_the_selected_subset_only() {
+    let scratch = Scratch::new("list-mrq");
+    let a2 = write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 512]);
+    let a3 = write_wav(&scratch, "A3.wav", mono(), &[SAMPLE; 512]);
+    write_wav(&scratch, "A4.wav", mono(), &[SAMPLE; 512]);
+    let estimator = FakeEstimator::new(&[220.0]);
+    let progress = Recording::default();
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+
+    let summary = generate_wavs(
+        &options(&scratch.0, &[Target::Mrq]),
+        &[a2, a3],
+        &estimator,
+        &progress,
+        &cancel,
+    )
+    .unwrap();
+
+    assert_eq!(summary.considered, 2);
+    assert_eq!(summary.written, 2);
+    let desc = mrq::Desc::read(&mrq::desc_path(&scratch.0))
+        .unwrap()
+        .unwrap();
+    assert_eq!(desc.len(), 2);
+    assert!(desc.has(&key("A2.wav")));
+    assert!(desc.has(&key("A3.wav")));
+    assert!(!desc.has(&key("A4.wav")));
+}
+
+#[test]
+fn generate_wavs_rejects_an_empty_selection() {
+    let scratch = Scratch::new("list-empty");
+    let estimator = FakeEstimator::new(&[220.0]);
+    let progress = Recording::default();
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+
+    let result = generate_wavs(
+        &options(&scratch.0, &[Target::Frq]),
+        &[],
+        &estimator,
+        &progress,
+        &cancel,
+    );
+
+    assert!(matches!(result, Err(GeneratorError::Config(_))));
 }
 
 #[test]

@@ -12,3 +12,5 @@ path = "src/main.rs"
 [dependencies]
 kira-frqgen.workspace = true
 eframe.workspace = true
+rfd.workspace = true
+egui-phosphor.workspace = true

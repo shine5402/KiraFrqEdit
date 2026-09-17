@@ -37,9 +37,29 @@ pub fn generate(
     progress: &dyn Progress,
     cancel: &CancelToken,
 ) -> Result<RunSummary, GeneratorError> {
-    validate(opts)?;
     let wavs = scan_wavs(&opts.root)?;
-    let descs = folder_descs(&wavs, opts);
+    generate_wavs(opts, &wavs, estimator, progress, cancel)
+}
+
+/// Run the generation pass over an explicit wav list instead of a scan — the
+/// GUI's selection. Semantics are identical to [`generate`] (including the
+/// per-folder mrq merge); `opts.root` is not consulted, so the caller passes
+/// the same options it planned with. An empty list is a
+/// [`GeneratorError::Config`].
+pub fn generate_wavs(
+    opts: &GenerateOptions,
+    wavs: &[PathBuf],
+    estimator: &dyn F0Estimator,
+    progress: &dyn Progress,
+    cancel: &CancelToken,
+) -> Result<RunSummary, GeneratorError> {
+    validate(opts)?;
+    if wavs.is_empty() {
+        return Err(GeneratorError::Config(
+            "no wav files to process".to_string(),
+        ));
+    }
+    let descs = folder_descs(wavs, opts);
     let pool = build_pool(opts.jobs)?;
 
     // Phase A: every wav in parallel. A wav with an mrq contribution keeps its

@@ -29,6 +29,9 @@ clap = { version = "4", features = ["derive"] }
 # Ctrl-C cancellation for the CLI (#12: exit 130 with a partial summary).
 ctrlc = "3"
 eframe = "0.36"
+# GUI dependencies (#23): native folder picker and Phosphor icons.
+rfd = "0.17"
+egui-phosphor = "0.14"
 
 kira-frq-core = { path = "crates/kira-frq-core" }
 kira-frq-world = { path = "crates/kira-frq-world" }

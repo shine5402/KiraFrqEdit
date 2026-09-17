@@ -3,8 +3,9 @@
 //! kira-frq-core.
 //!
 //! [`generate`] implements #11's input policy, #8's table policy and the batch
-//! semantics of #12; [`plan`] is the dry-run path (scan plus existence checks,
-//! no decode or analysis).
+//! semantics of #12; [`generate_wavs`] runs the same pass over an explicit wav
+//! list (the GUI's selection); [`plan`] is the dry-run path (scan plus
+//! existence checks, no decode or analysis).
 
 pub mod llsm;
 
@@ -14,7 +15,7 @@ mod scan;
 mod table;
 
 pub use kira_frq_core::mrq::Sharing;
-pub use run::{generate, plan};
+pub use run::{generate, generate_wavs, plan};
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
