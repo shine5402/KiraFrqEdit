@@ -1,6 +1,4 @@
-//! The `kira-frqgen` binary (#12): parse the surface, plan, ask the one
-//! question, run the generation pass, report on stderr and map the outcome to
-//! the exit-code table.
+//! The `kira-frqgen` binary (#12): plan, prompt, generate, report, exit.
 
 use std::collections::BTreeSet;
 use std::process::ExitCode;
@@ -28,6 +26,17 @@ fn run(cli: Cli) -> u8 {
     };
     let targets = cli.targets();
 
+    // Before the scan: Ctrl-C during it must still cancel the run (#12: 130
+    // with a partial summary), not surface the platform's signal exit.
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+    let handler_token = Arc::clone(&cancel);
+    if let Err(error) = ctrlc::set_handler(move || {
+        handler_token.store(true, Ordering::SeqCst);
+    }) && verbosity != Verbosity::Quiet
+    {
+        eprintln!("warning: cannot install the Ctrl-C handler: {error}");
+    }
+
     let mut config_warnings = Vec::new();
     let mut opts = GenerateOptions {
         root: cli.path.clone(),
@@ -54,15 +63,18 @@ fn run(cli: Cli) -> u8 {
         }
     }
 
-    let planned = prompt::f0_write_planned(&plan, &targets, cli.overwrite);
-    opts.delete_llsm =
+    opts.delete_llsm = if cancel.load(Ordering::Relaxed) {
+        true
+    } else {
+        let planned = prompt::f0_write_planned(&plan, &targets, cli.overwrite);
         prompt::resolve_llsm(cli.explicit_llsm(), cli.yes, cli.dry_run, planned, || {
             if prompt::interactive() {
                 prompt::ask_llsm()
             } else {
                 true
             }
-        });
+        })
+    };
 
     if cli.dry_run {
         if verbosity != Verbosity::Quiet {
@@ -74,16 +86,11 @@ fn run(cli: Cli) -> u8 {
                 report::plan_summary_line(&plan, &targets, cli.overwrite, started.elapsed())
             );
         }
-        return 0;
-    }
-
-    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
-    let handler_token = Arc::clone(&cancel);
-    if let Err(error) = ctrlc::set_handler(move || {
-        handler_token.store(true, Ordering::SeqCst);
-    }) && verbosity != Verbosity::Quiet
-    {
-        eprintln!("warning: cannot install the Ctrl-C handler: {error}");
+        return if cancel.load(Ordering::Relaxed) {
+            130
+        } else {
+            0
+        };
     }
 
     let estimator = WorldEstimator::new(opts.f0);

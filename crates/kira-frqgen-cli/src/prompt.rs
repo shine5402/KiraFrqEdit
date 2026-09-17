@@ -11,13 +11,15 @@ use std::io::{BufRead, IsTerminal, Write};
 
 use kira_frqgen::{RunPlan, Target};
 
+use crate::would_write;
+
 /// Whether the run would write an f0-bearing table (`frq` or `mrq`) for any
-/// wav: a selected target is written when it is missing or the run overwrites.
+/// wav.
 pub fn f0_write_planned(plan: &RunPlan, targets: &BTreeSet<Target>, overwrite: bool) -> bool {
     plan.files.iter().any(|file| {
-        [Target::Frq, Target::Mrq].iter().any(|target| {
-            targets.contains(target) && (overwrite || !file.existing.contains(target))
-        })
+        [Target::Frq, Target::Mrq]
+            .iter()
+            .any(|target| targets.contains(target) && would_write(file, *target, overwrite))
     })
 }
 

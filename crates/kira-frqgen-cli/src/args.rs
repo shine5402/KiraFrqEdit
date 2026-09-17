@@ -1,6 +1,4 @@
-//! The `kira-frqgen` command line (#12): one required PATH, no subcommand,
-//! plus the flag set the decision fixed. Values are parsed here; run
-//! semantics live in `main.rs` and the pure policy helpers in `prompt`/`report`.
+//! The `kira-frqgen` flags (#12): one required PATH, no subcommand.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -10,11 +8,7 @@ use kira_frqgen::{Estimator, F0Config, Target};
 
 /// Generate UTAU frequency tables with WORLD.
 #[derive(Debug, Parser)]
-#[command(
-    name = "kira-frqgen",
-    version,
-    about = "Generate UTAU frequency tables with WORLD"
-)]
+#[command(name = "kira-frqgen", version)]
 pub struct Cli {
     /// A voicebank folder (recursive scan) or a single .wav file.
     #[arg(value_name = "PATH")]
@@ -66,7 +60,7 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// The selected formats; `frq` when `--format` is absent (#12).
+    /// The selected formats (#12).
     pub fn targets(&self) -> BTreeSet<Target> {
         let mut targets: BTreeSet<Target> = self.format.iter().copied().map(Target::from).collect();
         if targets.is_empty() {
@@ -75,7 +69,7 @@ impl Cli {
         targets
     }
 
-    /// f0 settings: the standing defaults (#7/#8) with the chosen estimator.
+    /// The standing f0 defaults (#7/#8) with the chosen estimator.
     pub fn f0_config(&self) -> F0Config {
         F0Config {
             estimator: self.estimator.into(),
@@ -96,7 +90,6 @@ impl Cli {
     }
 }
 
-/// `--format` values (#12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum FormatArg {
     Frq,
@@ -114,7 +107,6 @@ impl From<FormatArg> for Target {
     }
 }
 
-/// `--estimator` values (#12): Harvest is the default, DIO is opt-in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum EstimatorArg {
     Harvest,

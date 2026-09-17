@@ -1,9 +1,10 @@
 //! Black-box tests for the `kira-frqgen` binary (#12): flags, report, exit
-//! codes, sidecar rules and non-TTY prompt behavior, over scratch folders.
+//! codes, sidecar rules and prompt behavior, over scratch folders.
 //!
-//! Runs that need a real table use a short harmonic tone (DIO or Harvest on
-//! 0.3 s is fast); dry-run and all-existing cases never decode, so they use
-//! placeholder bytes.
+//! Runs that need a real table use a short harmonic tone; dry-run and
+//! all-existing cases never decode, so they use placeholder bytes. The
+//! interactive ask loop itself is unit-tested in `prompt.rs` — a spawned
+//! process has no TTY, so here only the non-TTY default is observable.
 
 use std::fs;
 use std::path::{Path, PathBuf};

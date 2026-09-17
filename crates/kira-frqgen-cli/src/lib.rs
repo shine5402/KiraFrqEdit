@@ -1,18 +1,31 @@
-//! The `kira-frqgen` command-line interface (#12). The binary is a thin shell
-//! around these modules: `args` owns the clap surface, `prompt` the single
-//! interactive question's policy, and `report` the stderr lines; `main.rs`
-//! wires them to the generation pipeline.
+//! The `kira-frqgen` command-line interface (#12): `args` owns the clap
+//! surface, `prompt` the single interactive question's policy, and `report`
+//! the stderr lines; `main.rs` wires them to the generation pipeline.
 
 pub mod args;
 pub mod prompt;
 pub mod report;
 
-use kira_frqgen::RunSummary;
+use std::collections::BTreeSet;
 
-/// #12's exit codes for a completed run: `0` clean — warnings, skips and
+use kira_frqgen::{FilePlan, RunSummary, Target};
+
+/// Whether `target` would be written for `file` under the run's overwrite
+/// policy (#12): a missing table, or every selected table when overwriting.
+pub fn would_write(file: &FilePlan, target: Target, overwrite: bool) -> bool {
+    overwrite || !file.existing.contains(&target)
+}
+
+/// Whether any of `targets` would be written for `file`.
+pub fn any_would_write(file: &FilePlan, targets: &BTreeSet<Target>, overwrite: bool) -> bool {
+    targets
+        .iter()
+        .any(|target| would_write(file, *target, overwrite))
+}
+
+/// #12's exit code for a completed run: `0` clean — warnings, skips and
 /// "nothing to do" included — `1` any per-file failure, `130` cancelled (a
-/// partial summary was printed). Usage errors exit `2` through clap and fatal
-/// input errors exit `1` through `main`.
+/// partial summary was printed).
 pub fn exit_code(summary: &RunSummary) -> u8 {
     if summary.cancelled {
         130
@@ -27,6 +40,32 @@ pub fn exit_code(summary: &RunSummary) -> u8 {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn file(existing: &[Target]) -> FilePlan {
+        FilePlan {
+            wav: PathBuf::from("bank/A2.wav"),
+            existing: existing.iter().copied().collect(),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn overwrite_writes_existing_and_missing_tables_alike() {
+        let existing = file(&[Target::Frq]);
+        assert!(!would_write(&existing, Target::Frq, false));
+        assert!(would_write(&existing, Target::Frq, true));
+        assert!(would_write(&existing, Target::Pmk, false));
+        assert!(any_would_write(
+            &existing,
+            &BTreeSet::from([Target::Frq, Target::Pmk]),
+            false
+        ));
+        assert!(!any_would_write(
+            &existing,
+            &BTreeSet::from([Target::Frq]),
+            false
+        ));
+    }
 
     #[test]
     fn a_clean_run_exits_0_even_with_warnings_and_skips() {

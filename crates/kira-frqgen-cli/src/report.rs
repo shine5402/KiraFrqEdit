@@ -3,13 +3,15 @@
 //! Every line goes to stderr; stdout stays empty, reserved for a future
 //! `--json`. The default view names failing and warning files; `--verbose`
 //! adds one line per file including skips and targets; `--quiet` keeps only
-//! failures and drops the summary. No live progress bar — `--verbose` is the
-//! log-style progress view.
+//! failures and drops the summary. Lines stream as reports arrive, and
+//! parallel workers never interleave within a line.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use kira_frqgen::{FilePlan, FileReport, Progress, RunPlan, RunSummary, Target};
+
+use crate::{any_would_write, would_write};
 
 /// How much the report says (#12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +65,7 @@ impl Progress for Reporter {
     }
 }
 
-/// The `--verbose` line for one file: outcome, targets, warnings and failures.
+/// The `--verbose` line for one file.
 pub fn file_line(report: &FileReport) -> String {
     let mut parts = Vec::new();
     if !report.written.is_empty() {
@@ -100,11 +102,7 @@ pub fn file_line(report: &FileReport) -> String {
 /// appended) or the warning line; empty when the file was clean.
 pub fn problem_lines(report: &FileReport) -> Vec<String> {
     if !report.failures.is_empty() {
-        let mut line = format!(
-            "{}: error: {}",
-            report.wav.display(),
-            report.failures.join("; ")
-        );
+        let mut line = failure_line(report);
         if !report.warnings.is_empty() {
             line.push_str(&format!(" (warning: {})", report.warnings.join("; ")));
         }
@@ -125,12 +123,16 @@ pub fn failure_lines(report: &FileReport) -> Vec<String> {
     if report.failures.is_empty() {
         Vec::new()
     } else {
-        vec![format!(
-            "{}: error: {}",
-            report.wav.display(),
-            report.failures.join("; ")
-        )]
+        vec![failure_line(report)]
     }
+}
+
+fn failure_line(report: &FileReport) -> String {
+    format!(
+        "{}: error: {}",
+        report.wav.display(),
+        report.failures.join("; ")
+    )
 }
 
 /// The closing summary line; `failed` and `warnings` count distinct files.
@@ -150,13 +152,12 @@ pub fn summary_line(summary: &RunSummary, elapsed: Duration) -> String {
     line
 }
 
-/// The dry-run line for one wav: what the overwrite policy and the sidecar
-/// rules say would happen, per target.
+/// The dry-run line for one wav under the overwrite policy and sidecar rules.
 pub fn plan_line(file: &FilePlan, targets: &BTreeSet<Target>, overwrite: bool) -> String {
     let write: BTreeSet<Target> = targets
         .iter()
         .copied()
-        .filter(|target| overwrite || !file.existing.contains(target))
+        .filter(|target| would_write(file, *target, overwrite))
         .collect();
     let skip: BTreeSet<Target> = targets.difference(&write).copied().collect();
     let mut parts = Vec::new();
@@ -172,22 +173,17 @@ pub fn plan_line(file: &FilePlan, targets: &BTreeSet<Target>, overwrite: bool) -
     format!("plan: {}: {}", file.wav.display(), parts.join("; "))
 }
 
-/// The dry-run summary: files considered, files with something to write, files
-/// fully skipped, and files with plan warnings.
+/// The dry-run summary line.
 pub fn plan_summary_line(
     plan: &RunPlan,
     targets: &BTreeSet<Target>,
     overwrite: bool,
     elapsed: Duration,
 ) -> String {
-    let would_write = plan
+    let writing = plan
         .files
         .iter()
-        .filter(|file| {
-            targets
-                .iter()
-                .any(|target| overwrite || !file.existing.contains(target))
-        })
+        .filter(|file| any_would_write(file, targets, overwrite))
         .count();
     let warnings = plan
         .files
@@ -197,8 +193,8 @@ pub fn plan_summary_line(
     format!(
         "plan: considered {}, would write {}, would skip {}, warnings {}, elapsed {:.1}s",
         plan.files.len(),
-        would_write,
-        plan.files.len() - would_write,
+        writing,
+        plan.files.len() - writing,
         warnings,
         elapsed.as_secs_f64()
     )
