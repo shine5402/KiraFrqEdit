@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use eframe::egui::{
     self, Align, Align2, Color32, FontId, Key, Layout, RichText, Sense, Shape, Stroke, StrokeKind,
     Vec2,
+    widgets::text_edit::{TextEditOutput, TextEditState},
 };
 use egui_phosphor::regular as icons;
 use kirafrqgen_core::{
@@ -18,6 +19,7 @@ use kirafrqgen_core::{
 };
 
 use crate::run::{Row, RunState, Status};
+use crate::text_ops::{self, CharRange};
 use crate::tree::{DirNode, Targets, Tree, WavEntry, missing_label, target_name};
 
 /// Lock the run state, recovering a poisoned mutex: a panicked worker must not
@@ -26,6 +28,87 @@ fn lock(state: &Mutex<RunState>) -> MutexGuard<'_, RunState> {
     state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The path field's selection as a character range.
+fn range_of(state: &TextEditState) -> CharRange {
+    match state.cursor.char_range() {
+        Some(range) => {
+            let range = range.as_sorted_char_range();
+            CharRange::new(range.start.0, range.end.0)
+        }
+        None => CharRange::caret(0),
+    }
+}
+
+/// Store a character range back into the field's text-edit state.
+fn set_range(state: &mut TextEditState, range: CharRange) {
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(range.start),
+            egui::text::CCursor::new(range.end),
+        )));
+}
+
+/// The system clipboard behind the path field's context menu (#32): the handle
+/// is opened lazily, and `text` snapshots a read so Paste's enabled state can be
+/// decided without touching the clipboard every frame.
+#[derive(Default)]
+struct PathClipboard {
+    handle: Option<arboard::Clipboard>,
+    text: Option<String>,
+}
+
+impl PathClipboard {
+    /// Re-read the system clipboard for the menu's Paste item. A clipboard that
+    /// cannot be opened (headless, or held by another process) yields `None`,
+    /// which disables Paste rather than risking a destructive edit.
+    fn read(&mut self) -> Option<String> {
+        if self.handle.is_none() {
+            self.handle = arboard::Clipboard::new().ok();
+        }
+        self.handle
+            .as_mut()
+            .and_then(|clipboard| clipboard.get_text().ok())
+    }
+
+    /// Read once when the menu opens, to drive its Paste item.
+    fn snapshot(&mut self) {
+        self.text = self.read();
+    }
+
+    fn text(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+}
+
+/// The path field's context-menu choices (#32).
+#[derive(Clone, Copy)]
+enum PathMenu {
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+
+/// Draw the path field's context menu, returning the item the user picked.
+fn path_menu(ui: &mut egui::Ui, menu: &text_ops::MenuState) -> Option<PathMenu> {
+    let item = |ui: &mut egui::Ui, enabled: bool, label: &str, choice: PathMenu| {
+        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+            ui.close();
+            Some(choice)
+        } else {
+            None
+        }
+    };
+    item(ui, menu.cut, "Cut", PathMenu::Cut)
+        .or_else(|| item(ui, menu.copy, "Copy", PathMenu::Copy))
+        .or_else(|| item(ui, menu.paste, "Paste", PathMenu::Paste))
+        .or_else(|| {
+            ui.separator();
+            item(ui, menu.select_all, "Select All", PathMenu::SelectAll)
+        })
 }
 
 /// A run in flight: shared state the worker writes and the window reads, plus
@@ -94,6 +177,10 @@ pub struct KiraFrqGenApp {
     expanded: HashSet<PathBuf>,
     selected: BTreeSet<PathBuf>,
 
+    /// The system clipboard, opened lazily by the path field's context menu
+    /// (#32); an unavailable clipboard disables its Paste item.
+    clipboard: PathClipboard,
+
     run: Option<RunSession>,
 }
 
@@ -121,6 +208,7 @@ impl KiraFrqGenApp {
             plan_error: None,
             expanded: HashSet::new(),
             selected: BTreeSet::new(),
+            clipboard: PathClipboard::default(),
             run: None,
         }
     }
@@ -435,11 +523,80 @@ impl KiraFrqGenApp {
                     {
                         self.browse();
                     }
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut self.path)
-                            .hint_text("drop a folder, browse, or type a path…")
-                            .desired_width(ui.available_width()),
-                    );
+
+                    let field_id = ui.make_persistent_id("voicebank_path");
+                    // Snapshot the selection before the field runs: a right
+                    // click collapses it onto the click position, and the menu
+                    // must not lose it (#32).
+                    let previous = egui::TextEdit::load_state(ui.ctx(), field_id)
+                        .and_then(|state| state.cursor.char_range());
+                    let TextEditOutput {
+                        response,
+                        mut state,
+                        ..
+                    } = egui::TextEdit::singleline(&mut self.path)
+                        .id(field_id)
+                        .hint_text("drop a folder, browse, or type a path…")
+                        .desired_width(ui.available_width())
+                        .show(ui);
+
+                    if !running {
+                        if response.secondary_clicked() {
+                            if let Some(range) = previous {
+                                state.cursor.set_char_range(Some(range));
+                            }
+                            state.clone().store(ui.ctx(), field_id);
+                            // Restore focus so the selection survives while the
+                            // menu is open.
+                            response.request_focus();
+                            self.clipboard.snapshot();
+                        }
+
+                        let selection = range_of(&state);
+                        let menu =
+                            text_ops::menu_state(&self.path, selection, self.clipboard.text());
+                        let mut action = None;
+                        response.context_menu(|ui| action = path_menu(ui, &menu));
+
+                        if let Some(action) = action {
+                            let range = range_of(&state);
+                            match action {
+                                PathMenu::Cut => {
+                                    if let Some((taken, caret)) =
+                                        text_ops::cut(&mut self.path, range)
+                                    {
+                                        ui.ctx().copy_text(taken);
+                                        set_range(&mut state, caret);
+                                    }
+                                }
+                                PathMenu::Copy => {
+                                    let taken = text_ops::selected(&self.path, range);
+                                    if !taken.is_empty() {
+                                        ui.ctx().copy_text(taken.to_owned());
+                                    }
+                                }
+                                PathMenu::Paste => {
+                                    // Read again at action time so the paste
+                                    // uses the current clipboard, not the
+                                    // snapshot taken when the menu opened.
+                                    if let Some(clip) = self.clipboard.read()
+                                        && let Some(caret) =
+                                            text_ops::paste(&mut self.path, range, &clip)
+                                    {
+                                        set_range(&mut state, caret);
+                                    }
+                                }
+                                PathMenu::SelectAll => {
+                                    set_range(&mut state, text_ops::select_all(&self.path));
+                                }
+                            }
+                            state.clone().store(ui.ctx(), field_id);
+                            // Focus returns to the field so typing acts on the
+                            // resulting selection/caret.
+                            response.request_focus();
+                        }
+                    }
+
                     if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                         self.rescan();
                     }
@@ -990,4 +1147,28 @@ fn progress_spinner(ui: &egui::Ui, rect: egui::Rect, time: f64) {
         })
         .collect();
     painter.add(Shape::line(points, Stroke::new(1.8, fill)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_selection_survives_a_round_trip_through_the_field_state() {
+        let mut state = TextEditState::default();
+        set_range(&mut state, CharRange::new(2, 5));
+        assert_eq!(range_of(&state), CharRange::new(2, 5));
+    }
+
+    #[test]
+    fn a_caret_survives_a_round_trip_through_the_field_state() {
+        let mut state = TextEditState::default();
+        set_range(&mut state, CharRange::caret(3));
+        assert_eq!(range_of(&state), CharRange::caret(3));
+    }
+
+    #[test]
+    fn a_field_with_no_cursor_reads_as_a_caret_at_the_start() {
+        assert_eq!(range_of(&TextEditState::default()), CharRange::caret(0));
+    }
 }

@@ -4,6 +4,7 @@
 
 mod app;
 mod run;
+mod text_ops;
 mod tree;
 
 use app::KiraFrqGenApp;
