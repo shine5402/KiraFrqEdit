@@ -50,6 +50,21 @@ Controlled by `auto-update-llsm-mrq` in `moreconfig.txt` (default on):
 - `timestamp == 0` → trust the entry (hand edits survive).
 - `load-frq off/on/strict` controls whether `.frq` data is used to fill/correct unvoiced frames.
 
+## Filename keys and code pages
+
+The canonical `mrq.h` states the original contract: UTAU passes **8-bit Shift-JIS filenames** to
+resamplers, the resampler widens them through the Windows API, and the resulting UTF-16 string is
+stored as the entry key. The widening uses the *system* ANSI code page (OpenMoresampler's embedded
+`mrq.c`: `MultiByteToWideChar(CP_ACP, ...)`), so on a machine whose code page is not Shift-JIS the
+key is Shift-JIS bytes reinterpreted in that code page — mojibake. The corpus carries this
+CP932→CP936 fallout (see `frame-conventions.md`).
+
+The key is therefore environment-dependent for non-ASCII names. When the pipeline is
+self-consistent (the common case), it equals the bare filename as stored on the filesystem, so a
+writer targeting the local og-UTAU install can key on the stored filename as-is; reading legacy
+mojibake entries instead needs the system-code-page reinterpretation
+(`key.encode(system_cp).decode("cp932")` on the reading side) as an explicit opt-in.
+
 ## Corrections to the original reverse-engineering draft
 
 The draft was nearly right. Fixes:
