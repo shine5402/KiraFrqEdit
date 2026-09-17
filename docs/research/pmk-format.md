@@ -72,7 +72,7 @@ Entries (`N` × 8 bytes):
 Scripts: `.local/pmk_scan2.py`, `.local/pmk_correlate.py`, `.local/pmk_debug.py`.
 
 - All 1,231 files: `version == 19`, `size == 14 + 8*N`, min code 49.
-- `voice/bank-I/C4/aR_wav.pmk`: avg=169.841 (→259.7 Hz ≈ C4), N=2350. Runs: code 49 from
+- One C4 corpus file: avg=169.841 (→259.7 Hz ≈ C4), N=2350. Runs: code 49 from
   t=0.00–0.52 s, voiced codes 156–186 (267–237 Hz) until t=3.26 s, then 49 to the end (4.56 s).
   Within voiced runs the step equals the code; 209/2349 transitions deviate (mostly ±small).
 - No zero or negative codes exist in the corpus; codes `< 60` occur only 67 times in 1.59M entries.

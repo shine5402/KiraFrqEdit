@@ -38,6 +38,13 @@ outputs wrong pitch, glitches and pops.
   frqeditor manual PDF and its extracted text). Gitignored, not auto-injected by opencode, so check
   it when machine specifics matter.
 
+## Local data hygiene
+
+This repo is public. Never commit machine-local or corpus-identifying details — voicebank
+folder/file names, per-bank paths, corpus or install paths — into any tracked file or issue.
+Those live in `AGENTS.local.md`; tracked docs describe the corpus generically ("the local
+corpus", "one bank"), keeping evidence as counts and behaviors rather than names.
+
 ## Agent skills
 
 ### Issue tracker

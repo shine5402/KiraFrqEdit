@@ -72,7 +72,7 @@ unvoiced consonant/breath regions should stay unvoiced.
 
 ## Local verification
 
-`.local/frq_scan2.py` + `.local/verify_formats.py` over `voice/**/*.frq`:
+`.local/frq_scan2.py` + `.local/verify_formats.py` over the local corpus:
 
 - 4,650/4,650 files: magic `FREQ0003`, hop 256, size `40+16*N`, count field matches file size.
 - 1,257 files have non-zero reserved bytes: 362 store `44 AC 00 00` (44100) in the first 4 bytes,

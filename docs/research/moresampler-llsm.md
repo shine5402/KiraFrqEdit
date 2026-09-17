@@ -11,8 +11,8 @@ invalidate caches. Format details of `desc.mrq` itself are in [mrq-format.md](mr
 ## What `.llsm` files are
 
 - **One cache per source wav, in the wav's folder**, named by appending `.llsm` to the *full* wav
-  filename: `_かきくけこ.wav` → `_かきくけこ.wav.llsm` (`voice\bank-F\{A2,C4,D3,F3omake,...}`
-  in the local corpus). Not one per folder.
+  filename: `_かきくけこ.wav` → `_かきくけこ.wav.llsm` (across several pitch folders in the
+  local corpus). Not one per folder.
 - They are moresampler's serialized LLSM/LMIX analysis of the sample (libllsm layer-0 model:
   harmonic + noise parameters, with a few metadata fields such as `version` and `duration`).
   There is no public spec; the classic moresampler is the writer. The `version` field is a float at
@@ -156,16 +156,16 @@ entry.
 
 ## Sources
 
-- Local moresampler 0.8.4 binary: `the local moresampler binary (path in AGENTS.local.md)`
-  (stdout banner "Moresampler 0.8.4"); config `...\Resampler\moreconfig.txt` / mirror
+- Local moresampler 0.8.4 binary in `engines_original` (path in `AGENTS.local.md`; stdout banner
+  "Moresampler 0.8.4"); config `...\Resampler\moreconfig.txt` / mirror
   `moreconfig.txt`.
-- `the bundled Moresampler readme` (0.8.3): 0.6.1 changelog defines
+- The bundled Moresampler readme (0.8.3; path in `AGENTS.local.md`): 0.6.1 changelog defines
   `auto-update-llsm-mrq` ("If the .wav file is newer than the .llsm file, then reanalyze. If the
   .wav file is also newer than the mrq data entry, then re-estimate pitch before reanalyzing
   .llsm."); 0.3.0 notes that `desc.mrq` is scanned before creating `.llsm` files.
 - <https://github.com/Sleepwalking/mrq> — `mrq.c`/`mrq.h` field semantics and write behavior.
 - Mirror <https://github.com/hungrierr/Moresampler> — 0.8.3 readme, example `moreconfig.txt`.
-- Corpus: `voice\bank-F\**\*.wav.llsm` naming/mtime evidence.
+- Corpus: `**\*.wav.llsm` naming/mtime evidence.
 - Black-box procedure (reproducible): copy one corpus wav to a scratch folder (renamed, to control
   the mrq key), copy `moresampler.exe` and a `moreconfig.txt` (`resampler-compatibility on`,
   `auto-update-llsm-mrq on`, `dump-log-file <path>`) to a scratch engine dir, invoke the 13-argument

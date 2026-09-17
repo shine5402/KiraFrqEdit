@@ -1,7 +1,7 @@
 # `frq` amplitude scale: what writers store, and what KiraFrqGen should write
 
-Status: **corpus-verified** against 4,512 paired `frq`+`wav` files in the local UTAU corpus
-(`voice/**`), plus one open-source writer (OpenUtau) and the frqeditor manual. One corpus writer
+Status: **corpus-verified** against 4,512 paired `frq`+`wav` files in the local UTAU corpus, plus
+one open-source writer (OpenUtau) and the frqeditor manual. One corpus writer
 is named by its header marker (SpeedWagon); the others are distinguishable by their reserved bytes
 and amplitude formula but cannot be named from the files alone. The recommended formula is at the
 end. This resolves issue #3; the final policy call sits in #8.
@@ -18,9 +18,9 @@ end. This resolves issue #3; the final policy call sits in #8.
   | --- | ---: | --- |
   | `mean(|x|) * 2^15` | 683 | SpeedWagon marker (`" speedwagon     "`); also OpenUtau source |
   | `rms(frame) / sqrt(2) * 2^15` | 2,688 | unnamed, dominant; zero reserved bytes |
-  | `rms(frame) * 2^15` | 420 | bank-A-bank writer (unvoiced stored as `55.0`, not `0.0`) |
+  | `rms(frame) * 2^15` | 420 | `55.0`-unvoiced writer (unvoiced stored as `55.0`, not `0.0`) |
   | `3 * rms([i*256, i*256+1024))` | 363 | unnamed; writes `44100` at 0x14 |
-  | none of the above | 181 | `bank-K` bank (mangled-name orphan tables) + stragglers |
+  | none of the above | 181 | the orphan bank (mangled-name orphan tables) + stragglers |
 
 - **Recommendation:** write `amp[i] = 2^15 * mean(|x[j]|)` over the 256-sample frame — the
   OpenUtau `Frq.Build` formula, which also matches SpeedWagon's corpus output. Details below.
@@ -28,8 +28,8 @@ end. This resolves issue #3; the final policy call sits in #8.
 ## Method
 
 - Paired every `*_wav.frq` with `<stem>.wav` (4,601/4,654 local frq files are named `<name>_wav.frq`;
-  4,512 had a wav; the 142 orphans are mojibake-named leftover tables in `bank-K/`, which has 284 frq
-  for 142 wavs).
+  4,512 had a wav; the 142 orphans are mojibake-named leftover tables in the orphan bank,
+  which has 284 frq for 142 wavs).
 - For each file: decoded the wav (all corpus wavs are 44.1 kHz mono 16-bit), computed per-frame
   `mean(|x|)`, `rms`, `peak`, and boxcar variants (windows 256–4,096, offsets -256..+256), then
   took the per-file median ratio `amp / candidate` and the fraction of frames within 1%/5% of it.
@@ -49,11 +49,12 @@ This corrects `frq-format.md`: `44100` is stored in **362** files, not 1,253. "N
 is 1,257; most of those (895) are the SpeedWagon marker.
 
 Naming is not a discriminator: essentially every local frq is `<name>_wav.frq`. `44100` and SpeedWagon files
-are interleaved within the same banks (e.g. `bank-F` has 217 `44100` + 70 zero; `bank-G`
+are interleaved within the same banks (e.g. one bank has 217 `44100` + 70 zero; another
 has 22 `44100` + 1,929 zero), so banks were re-generated with different tools over time.
 
 A second fingerprint: two banks write **`f0 = 55.0` for unvoiced frames** instead of `0.0` —
-`bank-A` (420 files) and `bank-K` (284), plus 3 stragglers. Tools like oatsu's utau_tools map
+the `55.0`-unvoiced bank (420 files) and the orphan bank (284), plus 3 stragglers. Tools like
+oatsu's utau_tools map
 `<= 55` to unvoiced for exactly this reason; standard resamplers instead see a real ~55 Hz pitch.
 Do not imitate this.
 
@@ -66,18 +67,18 @@ within 5% of that file's median.
 | --- | ---: | --- | ---: | --- | ---: | ---: | ---: |
 | SpeedWagon marker | 726 | `meanabs256 * 2^15` | 0.9950 | 0.983–1.005 | 67% | 99.6% | 32% |
 | zero, dominant | 2,683 | `rms256/sqrt(2) * 2^15` | 1.0006 | 0.9967–1.0060 | 94.5% | 100% | 75% |
-| zero, bank-A | 425 | `rms256 * 2^15` | 1.00000 | (exact) | ~100% | ~100% | 100% |
+| zero, `55.0`-unvoiced | 425 | `rms256 * 2^15` | 1.00000 | (exact) | ~100% | ~100% | 100% |
 | reserved `44100` | 357 | `3 * rms1024` | 0.9994 | 0.9969–1.0007 | 99.4% | 99.7% | 85% |
-| zero, `bank-K` | 142 | — (no candidate fits) | — | — | — | — | ~12% |
+| zero, orphan bank | 142 | — (no candidate fits) | — | — | — | — | ~12% |
 
 Notes:
 
 - `rms256` is `sqrt(sum(x^2)/256)` over the frame; `rms256/sqrt(2)` is mathematically
   `sqrt(mean(x^2)/2)`, i.e. the writer divides the mean square by 2. The zero-reserved group is
-  overwhelmingly one writer (2,688/3,397 files; e.g. all of `bank-G` 1,929, `bank-I` 502,
-  `bank-D` 54, `bank-H` 15, plus parts of `bank-F`/`bank-E`/`bank-J`).
-- The bank-A writer's fit is exact frame-by-frame (10 files re-checked: ratio `1.00000`, 100% of
-  frames within 1%) — different from the `/sqrt(2)` writer despite both being zero-reserved and
+  overwhelmingly one writer (2,688/3,397 files; e.g. one bank 1,929, another 502,
+  two more 54 and 15, plus parts of three others).
+- The `55.0`-unvoiced writer's fit is exact frame-by-frame (10 files re-checked: ratio `1.00000`,
+  100% of frames within 1%) — different from the `/sqrt(2)` writer despite both being zero-reserved and
   both RMS-based.
 - The `44100`-writer's 3x factor is exact (99.4% of files within 1% of 3.0) and its window is a
   full **1,024 samples anchored at the frame start**, not a smoothed 256-window. Why 3x is
@@ -87,8 +88,8 @@ Notes:
 - SpeedWagon's per-file scale is solidly `meanabs * 2^15`, but its envelope is slightly wider or
   smoothed than the plain 256-frame boxcar (per-frame spread only ~32% within 5%; a ~1,024-wide
   mean-abs window raises a sample file to ~83%). The scale is what matters here.
-- The `bank-K` writer's amplitude tracks neither the wav's mean-abs nor its RMS under any tested
-  window (e.g. `ん_wav.frq`: amp rises 973 → 8,235 while frame RMS is flat ~2,500–4,000). The bank
+- The orphan bank's writer's amplitude tracks neither the wav's mean-abs nor its RMS under any tested
+  window (e.g. one orphan file: amp rises 973 → 8,235 while frame RMS is flat ~2,500–4,000). The bank
   contains many mangled-name orphan frq files, so the paired wav is probably not the analysis
   source. Treat as unknown; not a model for KiraFrqGen.
 
@@ -176,7 +177,7 @@ the repo's `frq-format.md` already names.
 - SpeedWagon's exact envelope window was not reproduced to per-frame precision (scale is certain,
   window is not). Whether it matters for display is unknown because frqeditor's graph scale is
   undocumented.
-- The `bank-K` writer (142 files) and 40 low-activity SpeedWagon files remain unclassified.
+- The orphan bank's writer (142 files) and 40 low-activity SpeedWagon files remain unclassified.
 - All fit evidence comes from wavs that may have been edited after table generation (the manual
   actively recommends normalizing analysis copies), which limits per-frame exactness; per-file
   median scales are robust to this.
@@ -196,13 +197,13 @@ the repo's `frq-format.md` already names.
 ## Local verification
 
 `.local/scan.py` + `.local/correlate.py` + `.local/classify.py` + `.local/final_stats.py` +
-`.local/window_search.py` over `voice/**` (4,654 frq, 4,512 paired):
+`.local/window_search.py` over the local corpus (4,654 frq, 4,512 paired):
 
 - Reserved markers: zero 3,397; `" speedwagon     "` 895; `44100` 362.
 - Formula strict counts (median within 2% of candidate): `meanabs*2^15` 683,
   `rms/sqrt(2)*2^15` 2,688, `rms*2^15` 420, `3*rms1024` 363, other 181.
-- Example exact fits: `bank-A\A3低\_あんああいあう_wav.frq` — 915/915 frames within 1% of
-  `rms256`; `bank-E\A#3\_あんああいあうあ_wav.frq` — `a/rms1024` = 2.92–3.10 across all
+- Example exact fits: one `55.0`-unvoiced-bank file — 915/915 frames within 1% of
+  `rms256`; one low-pitched bank file — `a/rms1024` = 2.92–3.10 across all
   frames (median 2.995), `a/rms256` swings 2.6–5.7.
 - `pmk_frq_check.py`: frq f0 matches pmk segments in only ~26–31% of frames in every group, so
   none of these frq files are pmk conversions.

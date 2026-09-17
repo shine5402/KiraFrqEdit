@@ -78,7 +78,7 @@ The draft was nearly right. Fixes:
 
 ## Local verification
 
-`.local/verify_formats.py` parsed `voice/bank-F/A2/desc.mrq` (11,430 bytes):
+`.local/verify_formats.py` parsed one corpus `desc.mrq` (11,430 bytes):
 
 - magic `mrq `, version 2, 3 entries, final offset == file size.
 - entry names decode as UTF-16LE (`_ああいあうえあA2.wav`, ...), `size == 20 + 4*nf0`, `fs=44100`,

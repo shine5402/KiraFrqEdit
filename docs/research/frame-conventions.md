@@ -37,8 +37,8 @@ sample, i.e. `[i*256, (i+1)*256)`:
 `N = floor(L/256) + 1` (frames 0…`floor(L/256)`):
 
 - Corpus: 4,513 paired files, `N - floor(L/256)` is **+1 for 4,089 (90.6 %)**, **0 for 418
-  (9.1 %, all of `bank-A`)**, and +2/+7/+12/+35/+41 for 6 stale tables (bank-A and
-  `bank-B`, where the wav was shortened after the table was generated, so `N` covers more samples
+  (9.1 %, all from one bank)**, and +2/+7/+12/+35/+41 for 6 stale tables (from two banks,
+  where the wav was shortened after the table was generated, so `N` covers more samples
   than the wav now has). The 2-D matrix of `L mod 256` × `N - floor(L/256)` is flat: the rule does
   not depend on the remainder, so it is `floor(L/hop)+1`, not `round`/`ceil`.
 - Black-box: `resampler.exe` produces `floor+1` at `L` = 100, 300, 44,100, 66,150, 82,500,
@@ -46,14 +46,14 @@ sample, i.e. `[i*256, (i+1)*256)`:
   produces `floor+2` at all successful probe lengths (one extra trailing zero frame).
 - The last frame's window may run past the end (it always does when `L` is a multiple of 256);
   UTAU's resampler writes `0.0` there on synthetic probes, and real tables commonly end unvoiced.
-- 142 further `.frq` in the corpus have no wav at all: stale copies in `bank-K/` with mojibake names
-  and ` (2)`/` (3)` duplicate suffixes.
+- 142 further `.frq` in the corpus have no wav at all: stale copies in the orphan bank with
+  mojibake names and ` (2)`/` (3)` duplicate suffixes.
 - All-unvoiced tables still use `floor+1` (18 corpus files; probe silence `L=44,100` → `N=173`,
   all `0.0`).
 
 ### Other writers, for reference
 
-`fresamp.exe` = `floor(L/256)+2`; the writer of `bank-A` (418 files, reserved bytes zero)
+`fresamp.exe` = `floor(L/256)+2`; one bank's writer (418 files, reserved bytes zero)
 = `floor(L/256)`. No locally installed engine produced `floor+0`, so that bank was likely generated
 by SpeedWagon or another tool; KiraFrqGen should use the UTAU-default `floor+1`.
 
@@ -68,13 +68,13 @@ entries, a 4.56 s voice sample `aR_wav.pmk` has 2,350 entries (average step 85.6
 most of it is unvoiced 49s).
 
 - Start: `pos_end[0] = code[0]` in 1,214/1,231 files (98.6 %); for an unvoiced start `code = 49`,
-  so the walk simply starts at sample 0. The 17 exceptions (12 in `bank-C`, 5 in `bank-K`)
+  so the walk simply starts at sample 0. The 17 exceptions (12 in one VCV bank, 5 in another)
   are voiced-start files where the first mark is the first detected pitch mark (69…357), as TIPS
   also does black-box (first mark 287 on a tone that starts at 0).
-- End: `pos_end` is always `< L` (1,230/1,231; the exception, `bank-B/し_wav.pmk`, pairs with a
+- End: `pos_end` is always `< L` (1,230/1,231; the single exception pairs with a
   shortened stale wav, and its `.frq` is stale too). Only 2 files were left with room for another
-  whole period (both edge/stale cases: `bank-A …_う吸う吐` with 2,555 samples to spare and
-  `…_ほんほほはほひ` off by 15). Rule: append marks while `next_pos_end < L`.
+  whole period (both edge/stale cases: one with 2,555 samples to spare and
+  one off by 15). Rule: append marks while `next_pos_end < L`.
   - Black-box silence (`L=44,100`, step 49): entries end at 44,051 = 899×49; 900×49 = L exactly and
     is not emitted. `L=100` → 2 entries, `L=300` → 6 entries.
   - A wav that ends voiced stops at the last analysed window, a few hundred samples early
@@ -137,7 +137,7 @@ the number of *complete* windows:
 `nf0 = floor(L/nhop)`
 
 - Corpus: 1,979 entries paired to wavs, `nf0 = floor(L/nhop)` for **1,974 (99.7 %)**; the 5
-  exceptions are stale caches in `bank-A` where the cached analysis is longer than the
+  exceptions are stale caches in one bank where the cached analysis is longer than the
   current wav (`nf0 > floor(L/nhop)`, by 512 up to ~35k samples — the same wav-shortening seen in
   that bank's `.frq` tables). No entry used `floor+1`, `ceil` or `round` (`round` "matches" 851
   only by coincidence when `L mod nhop >= nhop/2`).
@@ -147,7 +147,7 @@ the number of *complete* windows:
   some last points are `0.0` while the LLSM estimator warms up.
 - Because `nf0 = floor(L/nhop)`, no point represents the trailing partial window; the last point is
   at `(nf0-1)*nhop ≤ L - nhop` (trailing residuals in the corpus are all in `[256, 512)`).
-- Deleted entries carry a zero-length name and are skipped via `size`; two `bank-B` entries have a
+- Deleted entries carry a zero-length name and are skipped via `size`; two entries in one bank have a
   `size` larger than `20 + 4*nf0` (e.g. 308 vs 284), so trust the `size` field, not the formula.
 
 ## Pairing wavs to sidecars
@@ -162,7 +162,7 @@ the number of *complete* windows:
 - **Mojibake warning:** 1,248/1,981 entry names in the corpus were written as CP932→CP936
   mojibake (`_偄傫偄偄…` instead of `_いんいい…`) because moresampler ran under a Chinese locale.
   Recover with `name.encode("cp936").decode("cp932")` before pairing; otherwise 1,250 entries
-  appear to have no wav. Two entries in `bank-D` have all-NUL names (skip them).
+  appear to have no wav. Two entries in one bank have all-NUL names (skip them).
 
 ## Edge cases
 
@@ -176,7 +176,7 @@ the number of *complete* windows:
 
 ## Sources
 
-- Local corpus: `the local corpus (path in AGENTS.local.md)` (read-only), 4,655 `.frq`, 1,231 `.pmk`,
+- Local corpus (read-only; path in `AGENTS.local.md`), 4,655 `.frq`, 1,231 `.pmk`,
   50 `desc.mrq` (1,981 entries), all 44.1 kHz.
 - Black-box runs of the clean engine builds in `engines_original/`
   (`resampler.exe`, `phavoco.exe`, `fresamp.exe`, `TIPS.exe`, `moresampler.exe`); binaries are

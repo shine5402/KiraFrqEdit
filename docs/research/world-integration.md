@@ -34,8 +34,8 @@ exercised on this machine; see below). Feeds [#7] (core analysis-to-writer API).
 - Toolchain exercised: rustc/cargo 1.98.1 (`x86_64-pc-windows-msvc`), VS 2022 Build Tools
   (`cl.exe` 14.44.35207), `cc` 1.4.6, `hound` 3.5.1. `cargo test` needs no vcvars shell; `cc`
   locates MSVC itself.
-- Same tree builds with LLVM on Windows: `CC=CXX="clang-cl"`
-  (clang-cl 23.1.1), `cargo clean` first so `cc` re-runs. All tests pass and f0 output is
+- Same tree builds with LLVM on Windows: `CC=CXX="clang-cl"` (LLVM on PATH; clang-cl 23.1.1),
+  `cargo clean` first so `cc` re-runs. All tests pass and f0 output is
   identical to the MSVC build (voiced counts and means match exactly). `cc` picks the archiver;
   no extra configuration.
 - `build.rs` is toolchain-agnostic: `/EHsc` goes through `flag_if_supported`, so GNU-style
@@ -73,7 +73,7 @@ exercised on this machine; see below). Feeds [#7] (core analysis-to-writer API).
 
 - Frame count is `floor(1000 * x_length / fs / frame_period) + 1` for both estimators, and
   `temporal_positions[n] = n * frame_period / 1000` exactly (5.000 ms spacing asserted).
-- Real voicebank wav (`bank-F\A2\_ああいあうえあA2.wav`, 5.48 s, 44.1 kHz 16-bit mono):
+- Real voicebank wav (a 5.48 s, 44.1 kHz 16-bit mono corpus sample):
   DIO 679/1097 frames voiced, mean 111.24 Hz; Harvest 719/1097, mean 111.38 Hz; StoneMask moves
   the mean by <0.1 Hz. The sibling `_wav.frq` (945 frames, existing engine output) has mean
   116.66 Hz, min 55.38, max 858.57 - same ballpark, but different frame grid and a wider

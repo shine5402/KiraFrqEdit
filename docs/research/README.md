@@ -2,7 +2,7 @@
 
 Groundwork research for KiraFrqEdit, collected 2026-09. Every claim is either:
 
-- **verified** against real files from a local UTAU installation (`the local UTAU installation`, see `../../AGENTS.local.md` for machine-local state), and/or
+- **verified** against real files from a local UTAU installation (see `../../AGENTS.local.md` for machine-local state), and/or
 - **cited** from upstream sources (code, manuals, author blogs) listed in each document.
 
 ## Documents
