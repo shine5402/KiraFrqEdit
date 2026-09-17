@@ -1,0 +1,43 @@
+name: CI
+
+# Clang family only, to save CI time (map Notes): clang-cl on Windows, Apple
+# clang on macOS, clang on Linux. MSVC and gcc are expected to keep building
+# too — a failure there is a bug — but they are not CI jobs.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows (clang-cl)
+            os: windows-latest
+            cc: clang-cl
+            cxx: clang-cl
+          - name: macos (apple clang)
+            os: macos-latest
+            cc: clang
+            cxx: clang++
+          - name: linux (clang)
+            os: ubuntu-latest
+            cc: clang
+            cxx: clang++
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install clang and Linux GUI build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
+      - name: cargo test
+        run: cargo test --workspace --locked

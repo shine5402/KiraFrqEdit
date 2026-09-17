@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/kira-frq-core",
+    "crates/kira-frq-world",
+    "crates/kira-frqgen",
+    "crates/kira-frqgen-cli",
+    "crates/kira-frqgen-gui",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+publish = false
+repository = "https://github.com/shine5402/KiraFrqEdit"
+
+[workspace.dependencies]
+# Exact pins verified by research (#5, #6); bump deliberately.
+hound = "=3.5.1"
+rubato = "=5.0.0"
+cc = "=1.4.6"
+
+rayon = "1.12"
+clap = { version = "4", features = ["derive"] }
+eframe = "0.36"
+
+kira-frq-core = { path = "crates/kira-frq-core" }
+kira-frq-world = { path = "crates/kira-frq-world" }
+kira-frqgen = { path = "crates/kira-frqgen" }

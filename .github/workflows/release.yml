@@ -1,0 +1,52 @@
+name: Release
+
+# CD scaffold: version tags build the CLI and GUI binaries on the same
+# clang-family matrix as CI and upload them as workflow artifacts. Publishing
+# (releases page, installers) is out of scope for now.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            cc: clang-cl
+            cxx: clang-cl
+            exe-suffix: .exe
+          - name: macos
+            os: macos-latest
+            cc: clang
+            cxx: clang++
+            exe-suffix: ""
+          - name: linux-x64
+            os: ubuntu-latest
+            cc: clang
+            cxx: clang++
+            exe-suffix: ""
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install clang and Linux GUI build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
+      - name: cargo build --release
+        run: cargo build --release --bins --locked
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: kirafrqgen-${{ matrix.name }}
+          path: |
+            target/release/kira-frqgen${{ matrix.exe-suffix }}
+            target/release/KiraFrqGen${{ matrix.exe-suffix }}
