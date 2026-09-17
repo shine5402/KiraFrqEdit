@@ -14,3 +14,4 @@ kirafrqgen-core.workspace = true
 eframe.workspace = true
 rfd.workspace = true
 egui-phosphor.workspace = true
+arboard.workspace = true

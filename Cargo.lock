@@ -1872,6 +1872,7 @@ dependencies = [
 name = "kirafrqgen-gui"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "eframe",
  "egui-phosphor",
  "kirafrqgen-core",

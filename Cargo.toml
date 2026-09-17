@@ -33,6 +33,9 @@ eframe = "0.36"
 # GUI dependencies (#23): native folder picker and Phosphor icons.
 rfd = "0.17"
 egui-phosphor = "0.14"
+# Reading the clipboard for the path field's context menu (#32); egui only
+# writes to it, and eframe's own arboard copy is not exposed to apps.
+arboard = { version = "3", default-features = false }
 
 kirafrq-formats = { path = "crates/kirafrq-formats" }
 kirafrq-audio = { path = "crates/kirafrq-audio" }
