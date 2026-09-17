@@ -52,18 +52,16 @@ Controlled by `auto-update-llsm-mrq` in `moreconfig.txt` (default on):
 
 ## Filename keys and code pages
 
-The canonical `mrq.h` states the original contract: UTAU passes **8-bit Shift-JIS filenames** to
-resamplers, the resampler widens them through the Windows API, and the resulting UTF-16 string is
-stored as the entry key. The widening uses the *system* ANSI code page (OpenMoresampler's embedded
-`mrq.c`: `MultiByteToWideChar(CP_ACP, ...)`), so on a machine whose code page is not Shift-JIS the
-key is Shift-JIS bytes reinterpreted in that code page — mojibake. The corpus carries this
-CP932→CP936 fallout (see `frame-conventions.md`).
+`mrq.h` documents the design: UTAU passes **8-bit Shift-JIS filenames** to resamplers, and the
+system's 8-bit command-line conversion interprets those bytes with the machine's code page on the
+way to the resampler; moresampler stores the resulting UTF-16 filename as the entry key. The key is
+therefore simply the wav filename as the running environment sees it: mojibake for non-ASCII names
+on a non-Shift-JIS system is expected, not an error. The corpus carries this CP932→CP936 fallout
+(see `frame-conventions.md`).
 
-The key is therefore environment-dependent for non-ASCII names. When the pipeline is
-self-consistent (the common case), it equals the bare filename as stored on the filesystem, so a
-writer targeting the local og-UTAU install can key on the stored filename as-is; reading legacy
-mojibake entries instead needs the system-code-page reinterpretation
-(`key.encode(system_cp).decode("cp932")` on the reading side) as an explicit opt-in.
+KiraFrqGen keys entries on the bare wav filename **as stored on the filesystem**, verbatim. The
+only addition is the opt-in sharing mode: on a machine whose code page is not 932 it also writes
+the Japanese-code-page name of the same wav, so a shared `desc.mrq` works in the Japanese region.
 
 ## Corrections to the original reverse-engineering draft
 
@@ -88,7 +86,6 @@ The draft was nearly right. Fixes:
 
 - <https://github.com/Sleepwalking/mrq> (canonical spec/code)
 - Moresampler 0.8.4 readme + `license.txt` (mirror: <https://github.com/hungrierr/Moresampler>)
-- OpenMoresampler (GPL-3.0 reimplementation, embeds `mrq.c`): <https://github.com/LingYi0110/OpenMoresampler>
 - Partial (partly incorrect) Japanese write-up: <https://github.com/rokujyushi/Binary-File-Investigation/blob/main/docs/MRQ_FORMAT.md>
 
 ## Local verification
