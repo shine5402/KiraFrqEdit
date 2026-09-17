@@ -153,10 +153,10 @@ entry.
   investigated.
 - mrq file-level versions other than 2 (the "unsupported version, file ignored" path) were not
   exercised end to end.
-- `load-frq` was not exercised black-box here; the tutorial documents it: `strict` loads `.frq`
-  pitch when `desc.mrq` is unavailable, `on` uses `.frq` to correct moresampler's own estimate,
-  and the result is written to `desc.mrq` either way. Default `off` (assumed; the tutorial's
-  analysis table lists no default), i.e. `.frq` is not read unless the user opts in.
+- `load-frq` (default `off`) was not exercised black-box here; the tutorial documents it: `strict`
+  loads `.frq` pitch when `desc.mrq` is unavailable, `on` uses `.frq` to correct moresampler's own
+  estimate, and the result is written to `desc.mrq` either way. With the default, `.frq` is not
+  read unless the user opts in.
 
 ## Sources
 
