@@ -28,7 +28,8 @@ Entries (`N` × 8 bytes):
 - **`code == 49` means unvoiced / no pitch.** Every local file uses 49 as its minimum, with huge
   counts of it (1.59M occurrences across the corpus). It is *not* a literal 900 Hz: TIPS's
   documented detection range is 86–880 Hz (min real code 50). Values 53–59 appear rarely.
-  Other codes observed: 49–186 min/max per file, typical voiced values 120–190.
+  Other codes observed: 50–448 across the corpus (~98–882 Hz), the bulk of voiced entries in
+  120–300; the low end comes from low-pitched banks.
 - `pos_end` is approximately cumulative: within a run of constant `code`, consecutive entries
   advance by exactly that code. At transitions the increments deviate slightly (±dozens of samples
   total per file) — the values appear pitch-mark aligned rather than recomputed. Do not
