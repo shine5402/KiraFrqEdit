@@ -82,21 +82,62 @@ fn parse_reads_the_header_and_the_interleaved_frames() {
     assert_eq!(parsed.key_hz, 440.0);
 }
 
-/// Reading robustness 2: the file size decides the frame count; a stale or
-/// patched header `N` never truncates or pads the table.
+/// Reading: the header count is authoritative — exactly that many frames are
+/// read, and extra bytes after them (appended data) are ignored.
 #[test]
-fn file_size_beats_a_stale_header_count() {
+fn header_count_wins_and_extra_trailing_data_is_ignored() {
     let frames = [(100.0, 1.0), (200.0, 2.0), (0.0, 3.0)];
-    for patched in [0i32, 1, 3, 5, -2] {
-        let bytes = frq_file(256, 150.0, &[0; 16], patched, &frames);
+    for declared in [0i32, 1, 3] {
+        let mut bytes = frq_file(256, 150.0, &[0; 16], declared, &frames);
+        bytes.extend_from_slice(&[0xAB; 8]);
+
         let parsed = frq::parse(&bytes).unwrap();
+        let count = declared as usize;
         assert_eq!(
             parsed.f0_hz,
-            vec![100.0, 200.0, 0.0],
-            "header N = {patched} must not win over the file size"
+            frames[..count]
+                .iter()
+                .map(|&(f0, _)| f0)
+                .collect::<Vec<_>>(),
+            "header count {declared}"
         );
-        assert_eq!(parsed.amplitude.unwrap().len(), 3);
+        assert_eq!(
+            parsed.amplitude,
+            Some(
+                frames[..count]
+                    .iter()
+                    .map(|&(_, amp)| amp)
+                    .collect::<Vec<_>>()
+            ),
+            "header count {declared}"
+        );
     }
+}
+
+/// Reading: a file with fewer frames than the header declares is truncated,
+/// never partially read.
+#[test]
+fn a_file_shorter_than_its_header_count_is_rejected() {
+    let frames = [(100.0, 1.0), (200.0, 2.0), (0.0, 3.0)];
+    for declared in [4i32, 5, i32::MAX] {
+        let bytes = frq_file(256, 150.0, &[0; 16], declared, &frames);
+        assert_eq!(
+            frq::parse(&bytes),
+            Err(FrqError::Truncated),
+            "header count {declared}"
+        );
+    }
+}
+
+/// Sanity check: a negative frame count is a malformed header, not a
+/// truncation.
+#[test]
+fn a_negative_frame_count_is_a_typed_error() {
+    let bytes = frq_file(256, 440.0, &[0; 16], -2, &[(440.0, 1.0)]);
+    assert_eq!(
+        frq::parse(&bytes),
+        Err(FrqError::InvalidCount { count: -2 })
+    );
 }
 
 /// Reading robustness 1: a non-`FREQ0003` magic is rejected as a typed error,
@@ -118,15 +159,6 @@ fn wrong_magic_and_short_files_are_typed_errors() {
     assert!(parsed.f0_hz.is_empty());
     assert_eq!(parsed.amplitude, Some(Vec::new()));
     assert_eq!(parsed.key_hz, 440.0);
-}
-
-/// Parse to EOF exactly: a tail that is not a whole `(f0, amp)` pair is
-/// malformed, not silently dropped.
-#[test]
-fn a_partial_trailing_frame_is_rejected() {
-    let mut bytes = frq_file(256, 440.0, &[0; 16], 1, &[(440.0, 1.0)]);
-    bytes.extend_from_slice(&[0xAB; 8]);
-    assert_eq!(frq::parse(&bytes), Err(FrqError::TrailingData { extra: 8 }));
 }
 
 /// Reading robustness: the reserved area is not assumed zero — the corpus

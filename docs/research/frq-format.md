@@ -34,8 +34,10 @@ The `.frq` file is the default UTAU frequency table, used by `resampler`, `fresa
 ## Reading robustness checklist
 
 1. Check the magic; reject or convert anything that is not `FREQ0003` (no `FREQ0001/0002` is known).
-2. Prefer `N` from the header, but cross-check against `(filesize - 40) / 16`; if they disagree,
-   prefer the file size (truncated/patched files exist in the wild).
+2. Read `N` from the header and read exactly `N` frames. A file shorter than `40 + 16*N` is
+   truncated and is rejected; bytes past the declared frames (appended data) are ignored. This
+   matches how consumers index (UTAU/OpenUtau read `N` first), and every local file has
+   `N == (filesize - 40) / 16` anyway.
 3. Accept both naming conventions for lookups: `<name>.wav.frq` and `<name>_wav.frq`
    (UTAU/OpenUtau generate `_wav.frq`; local corpus is 100% `_wav.frq`).
 4. Do not assume `hop == 256`; read it (other rates could appear in theory). Time of frame `i` is

@@ -6,10 +6,11 @@
 //! it reads and writes whatever path the pipeline hands it, sidecar naming
 //! included.
 //!
-//! Reading derives the frame count from the file size, so a stale or patched
-//! header count never truncates or pads a table, and rejects a tail that is not
-//! whole 16-byte pairs rather than silently dropping it. The 16 reserved bytes
-//! are ignored (real files store a sample rate or a SpeedWagon marker there).
+//! Reading makes the header's frame count authoritative: exactly that many
+//! pairs are read, a file shorter than the count declares is rejected as
+//! truncated, and extra bytes after the declared frames (appended data) are
+//! ignored. The 16 reserved bytes are ignored too (real files store a sample
+//! rate or a SpeedWagon marker there).
 //!
 //! Writing zeroes those reserved bytes; preserving an existing file's reserved
 //! bytes byte-for-byte is beyond the neutral model and belongs to the
@@ -36,8 +37,9 @@ pub const SAMPLE_RATE: u32 = 44_100;
 
 /// Parse a complete file image into the neutral table.
 ///
-/// The header count field is not consulted (see the module docs). f0 and the
-/// key frequency are preserved unrounded and the amplitude always lands in
+/// The header's frame count decides how many frames are read; extra bytes
+/// after them are ignored (see the module docs). f0 and the key frequency are
+/// preserved unrounded and the amplitude always lands in
 /// [`FrequencyTable::amplitude`].
 pub fn parse(bytes: &[u8]) -> Result<FrequencyTable, FrqError> {
     let header = bytes.get(..HEADER_LEN).ok_or(FrqError::Truncated)?;
@@ -49,16 +51,21 @@ pub fn parse(bytes: &[u8]) -> Result<FrequencyTable, FrqError> {
         return Err(FrqError::InvalidHop { hop });
     }
     let key_hz = f64::from_le_bytes(header[12..20].try_into().expect("eight bytes"));
-
-    let (pairs, leftover) = bytes[HEADER_LEN..].as_chunks::<FRAME_LEN>();
-    if !leftover.is_empty() {
-        return Err(FrqError::TrailingData {
-            extra: leftover.len(),
-        });
+    let count = i32::from_le_bytes(header[36..40].try_into().expect("four bytes"));
+    if count < 0 {
+        return Err(FrqError::InvalidCount { count });
     }
-    let mut f0_hz = Vec::with_capacity(pairs.len());
-    let mut amplitude = Vec::with_capacity(pairs.len());
-    for pair in pairs {
+    let count = count as usize;
+
+    let available = (bytes.len() - HEADER_LEN) / FRAME_LEN;
+    if count > available {
+        return Err(FrqError::Truncated);
+    }
+    let frames = &bytes[HEADER_LEN..HEADER_LEN + count * FRAME_LEN];
+
+    let mut f0_hz = Vec::with_capacity(count);
+    let mut amplitude = Vec::with_capacity(count);
+    for pair in frames.as_chunks::<FRAME_LEN>().0 {
         f0_hz.push(f64::from_le_bytes(
             pair[..8].try_into().expect("eight bytes"),
         ));
@@ -131,10 +138,11 @@ pub fn write(path: &Path, table: &FrequencyTable) -> io::Result<()> {
 pub enum FrqError {
     /// The magic is not `FREQ0003` (no `FREQ0001`/`FREQ0002` is known).
     BadMagic,
-    /// The image is shorter than the 40-byte header.
+    /// The image is shorter than the 40-byte header, or shorter than the
+    /// header's frame count declares.
     Truncated,
-    /// The tail is not a whole number of 16-byte `(f0, amp)` pairs.
-    TrailingData { extra: usize },
+    /// The header frame count is negative.
+    InvalidCount { count: i32 },
     /// The header `hop` is not a positive sample count.
     InvalidHop { hop: i32 },
 }
@@ -143,11 +151,10 @@ impl std::fmt::Display for FrqError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FrqError::BadMagic => write!(f, "not a frq file (bad magic)"),
-            FrqError::Truncated => write!(f, "truncated frq data (no complete header)"),
-            FrqError::TrailingData { extra } => write!(
-                f,
-                "frq data has {extra} byte(s) after the last whole (f0, amp) frame"
-            ),
+            FrqError::Truncated => write!(f, "truncated frq data"),
+            FrqError::InvalidCount { count } => {
+                write!(f, "frq header has invalid frame count {count}")
+            }
             FrqError::InvalidHop { hop } => write!(f, "frq header has invalid hop {hop}"),
         }
     }
