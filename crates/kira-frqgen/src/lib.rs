@@ -6,6 +6,8 @@
 //! [`WorldEstimator`] is the only place the WORLD wrapper enters. `generate`
 //! itself lands with the pipeline ticket (input policy is #11).
 
+pub mod llsm;
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -53,6 +53,13 @@ folder's `desc.mrq`, moresampler's `.llsm`.
 moresampler's per-wav DSP model cache, derived from audio and f0; stale whenever f0 changes, and
 regenerated on demand.
 
+## Sharing flag
+
+The opt-in `desc.mrq` mode that also writes each wav's Japanese-side name, so a table made on a
+non-Japanese machine works in the Japanese region: the on-disk name is encoded with the machine's
+8-bit code page and the bytes decoded as CP932. A no-op on code page 932; with the flag on, a wav
+counts as having an mrq table only when both names exist.
+
 ## KiraFrqGen
 
 The bulk frequency-table generation tool of this project: CLI `kira-frqgen` and GUI `KiraFrqGen`

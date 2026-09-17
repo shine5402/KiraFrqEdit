@@ -20,6 +20,10 @@ hound = "=3.5.1"
 rubato = "=5.0.0"
 cc = "=1.4.6"
 
+# The mrq sharing flag's local-code-page conversion (#16); WHATWG Shift_JIS and
+# GBK cover the corpus-relevant code pages.
+encoding_rs = "0.8"
+
 rayon = "1.12"
 clap = { version = "4", features = ["derive"] }
 eframe = "0.36"
