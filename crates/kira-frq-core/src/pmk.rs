@@ -73,8 +73,9 @@ fn frame_at(table: &FrequencyTable, pos: f64) -> f64 {
 
 /// The #9 period walk: advance by the unrounded period, emit `(round(pos),
 /// code)`. The emitted mark is rounded, so the stop is too: `round(pos +
-/// period) >= L` aborts even when the unrounded position is still below `L`,
-/// which keeps every `pos_end` below `L` (contract 3 of #9).
+/// period) >= L` aborts even when the unrounded position is still below `L`.
+/// A mark that would round to `L` is suppressed rather than clamped, which is
+/// what `TIPS.exe` does (see the pmk end rule in `docs/research/frame-conventions.md`).
 fn walk(table: &FrequencyTable, length_samples: usize) -> Vec<(i32, i32)> {
     let length = length_samples as f64;
     let mut entries = Vec::new();
