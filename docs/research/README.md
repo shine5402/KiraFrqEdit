@@ -16,6 +16,7 @@ Groundwork research for KiraFrqEdit, collected 2026-09. Every claim is either:
 | [f0-generation.md](f0-generation.md) | WORLD (DIO/Harvest), SpeedWagon, Rust integration options |
 | [world-integration.md](world-integration.md) | Vendored WORLD v1.0.1 build on MSVC and clang-cl, `cc` + raw `extern "C"` shim, timings, Harvest pure-tone gotcha, license duties |
 | [harvest-voicing.md](harvest-voicing.md) | Harvest's voiced/unvoiced decision in the vendored source, the constants behind it, ranked levers to stop it voicing noise (D4C gate, duration knobs, DIO), upstream design intent |
+| [ml-f0-estimators.md](ml-f0-estimators.md) | Permissive ML f0 options (RMVPE, CREPE, FCPE, SwiftF0): weights/licenses, Rust runtimes (`ort` vs `tract`), CPU cost vs WORLD, hop-256/71-800 Hz mapping, U/V evidence |
 | [frqeditor-manual-notes.md](frqeditor-manual-notes.md) | Digest of the frqeditor manual (UTAU周波数表資料 0.90): concepts, engine behavior, editing + auto check/fix spec |
 | [frame-conventions.md](frame-conventions.md) | Frame grid, count and edge conventions across `frq`/`pmk`/`mrq`, derived from the local corpus |
 | [frq-amplitude-scale.md](frq-amplitude-scale.md) | Amplitude array scales per writer, and the formula KiraFrqGen should write |
