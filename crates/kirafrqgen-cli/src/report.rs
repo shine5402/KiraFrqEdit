@@ -7,6 +7,9 @@
 //! parallel workers never interleave within a line.
 
 use std::collections::BTreeSet;
+use std::io::{IsTerminal as _, Write as _};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use kirafrqgen_core::{FilePlan, FileReport, Progress, RunPlan, RunSummary, Target};
@@ -24,45 +27,253 @@ pub enum Verbosity {
     Verbose,
 }
 
+/// How the reporter surfaces live progress (#35).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProgressMode {
+    /// No status line: non-TTY stderr, `--quiet`, or `--dry-run`.
+    Off,
+    /// Default on a TTY: a single in-place `[k/N]` line, stepped per file.
+    Overall,
+    /// `--progress` on a TTY: `[k/N] <wav> <pct>%`, fed by `file_progress`.
+    Detailed,
+}
+
 /// The reporter the run drives: prints as reports arrive and the summary when
 /// the run ends. Lines are emitted with single `eprintln!` calls, so parallel
 /// workers never interleave within a line.
+///
+/// Live progress (#35) is purely additive: a single in-place status line on
+/// stderr, rewritten as the run advances and cleared before every completion
+/// line and the summary. When stderr is not a TTY nothing extra prints, so
+/// piped logs read exactly as before.
 pub struct Reporter {
     verbosity: Verbosity,
     start: Instant,
+    mode: ProgressMode,
+    state: Mutex<ProgressState>,
+}
+
+/// Mutable progress counters, behind a mutex so parallel workers share one
+/// status line last-writer-wins.
+#[derive(Debug)]
+struct ProgressState {
+    total: usize,
+    finished: usize,
+    /// Latest per-wav fraction for `--progress` (wav, done, total).
+    current: Option<(PathBuf, u64, u64)>,
+    last_render: Option<Instant>,
+    /// Permille rendered last; per-frame estimator events below the step are
+    /// swallowed.
+    last_permille: Option<u64>,
+    /// Visible width of the status line, for space-overwrite clearing.
+    last_len: usize,
 }
 
 impl Reporter {
     pub fn new(verbosity: Verbosity) -> Self {
+        Self::build(verbosity, 0, false, false)
+    }
+
+    /// A reporter for a real run: `total` is the planned wav count, `detailed`
+    /// is `--progress`. The status line enables only on a TTY and never under
+    /// `--quiet`; `--dry-run` never builds one (it returns before `generate`).
+    pub fn with_progress(verbosity: Verbosity, total: usize, detailed: bool) -> Self {
+        let tty = std::io::stderr().is_terminal();
+        Self::build(verbosity, total, detailed, tty)
+    }
+
+    fn build(verbosity: Verbosity, total: usize, detailed: bool, tty: bool) -> Self {
+        let mode = if verbosity == Verbosity::Quiet || !tty {
+            ProgressMode::Off
+        } else if detailed {
+            ProgressMode::Detailed
+        } else {
+            ProgressMode::Overall
+        };
         Self {
             verbosity,
             start: Instant::now(),
+            mode,
+            state: Mutex::new(ProgressState {
+                total,
+                finished: 0,
+                current: None,
+                last_render: None,
+                last_permille: None,
+                last_len: 0,
+            }),
+        }
+    }
+
+    /// The status line for the current state, if any.
+    fn status_line(state: &ProgressState) -> Option<String> {
+        match state.current {
+            Some((ref wav, done, total)) if total > 0 => Some(detailed_line(
+                state.finished,
+                state.total,
+                wav,
+                done,
+                total,
+            )),
+            _ => None,
+        }
+        .or_else(|| {
+            // Overall mode (or detailed before the first event) still shows
+            // the bare counter once the run has a total.
+            Some(overall_line(state.finished, state.total))
+        })
+    }
+
+    fn render_locked(&self, state: &mut ProgressState) {
+        let Some(line) = Self::status_line(state) else {
+            return;
+        };
+        // Pad short lines so a longer previous frame leaves no ghosts.
+        let pad = state.last_len.saturating_sub(line.len());
+        eprint!("\r{line}{}", " ".repeat(pad));
+        let _ = std::io::stderr().flush();
+        state.last_len = line.len();
+        state.last_render = Some(Instant::now());
+    }
+
+    fn clear_locked(state: &mut ProgressState) {
+        if state.last_len > 0 {
+            eprint!("\r{}\r", " ".repeat(state.last_len));
+            let _ = std::io::stderr().flush();
+            state.last_len = 0;
         }
     }
 }
 
 impl Progress for Reporter {
+    fn wants_file_progress(&self) -> bool {
+        self.mode == ProgressMode::Detailed
+    }
+
+    fn file_started(&self, wav: &Path) {
+        if self.mode != ProgressMode::Detailed {
+            return;
+        }
+        let mut state = self.state.lock().expect("progress lock");
+        state.current = Some((wav.to_path_buf(), 0, 1000));
+        // A new wav always re-renders: the name changed even when the
+        // fraction did not.
+        self.render_locked(&mut state);
+        state.last_permille = Some(0);
+    }
+
+    fn file_progress(&self, wav: &Path, done: u64, total: u64) {
+        if self.mode != ProgressMode::Detailed {
+            return;
+        }
+        let now = Instant::now();
+        let mut state = self.state.lock().expect("progress lock");
+        let wav_changed = state
+            .current
+            .as_ref()
+            .is_none_or(|(current, _, _)| current != wav);
+        state.current = Some((wav.to_path_buf(), done, total));
+        if should_render_progress(
+            state.last_render,
+            state.last_permille,
+            wav_changed,
+            permille_of(done, total),
+            now,
+        ) {
+            self.render_locked(&mut state);
+            state.last_permille = Some(permille_of(done, total));
+        }
+    }
+
     fn file_finished(&self, report: &FileReport) {
-        match self.verbosity {
-            Verbosity::Quiet => {
-                for line in failure_lines(report) {
-                    eprintln!("{line}");
-                }
+        let completion: Vec<String> = match self.verbosity {
+            Verbosity::Quiet => failure_lines(report).to_vec(),
+            Verbosity::Normal => problem_lines(report),
+            Verbosity::Verbose => vec![file_line(report)],
+        };
+        if self.mode == ProgressMode::Off {
+            for line in &completion {
+                eprintln!("{line}");
             }
-            Verbosity::Normal => {
-                for line in problem_lines(report) {
-                    eprintln!("{line}");
-                }
-            }
-            Verbosity::Verbose => eprintln!("{}", file_line(report)),
+            return;
+        }
+        let mut state = self.state.lock().expect("progress lock");
+        state.finished = state.finished.saturating_add(1).min(state.total.max(1));
+        Self::clear_locked(&mut state);
+        for line in &completion {
+            eprintln!("{line}");
+        }
+        // Re-arm the counter for the remaining files; after the last file
+        // the line stays cleared for the summary.
+        if state.finished < state.total {
+            self.render_locked(&mut state);
+        } else {
+            state.current = None;
+            state.last_permille = None;
         }
     }
 
     fn finished(&self, summary: &RunSummary) {
+        if self.mode != ProgressMode::Off {
+            let mut state = self.state.lock().expect("progress lock");
+            Self::clear_locked(&mut state);
+        }
         if self.verbosity != Verbosity::Quiet {
             eprintln!("{}", summary_line(summary, self.start.elapsed()));
         }
     }
+}
+
+/// The default TTY status line: the overall `[k/N]` counter.
+pub fn overall_line(finished: usize, total: usize) -> String {
+    format!("[{finished}/{total}] {finished}/{total} files finished")
+}
+
+/// The `--progress` status line: the counter plus the current wav and its
+/// percent.
+pub fn detailed_line(
+    finished: usize,
+    total: usize,
+    wav: &Path,
+    done: u64,
+    total_permille: u64,
+) -> String {
+    let pct = permille_of(done, total_permille) * 100 / 1000;
+    format!("[{finished}/{total}] {} {pct}%", wav.display())
+}
+
+/// `done` of `total` in permille, clamped; a zero denominator reads as zero.
+fn permille_of(done: u64, total: u64) -> u64 {
+    done.min(total)
+        .checked_mul(1000)
+        .and_then(|scaled| scaled.checked_div(total))
+        .unwrap_or(0)
+        .min(1000)
+}
+
+/// Throttle per-frame estimator events (#35): a new wav always renders, else
+/// render once the permille advanced a step or a time slice passed, so a hot
+/// frame loop cannot spam the terminal.
+fn should_render_progress(
+    last_render: Option<Instant>,
+    last_permille: Option<u64>,
+    wav_changed: bool,
+    permille: u64,
+    now: Instant,
+) -> bool {
+    const MIN_PERMILLE_STEP: u64 = 20;
+    const MIN_INTERVAL: Duration = Duration::from_millis(100);
+    if wav_changed {
+        return true;
+    }
+    let Some(rendered_at) = last_render else {
+        return true;
+    };
+    let last = last_permille.unwrap_or(0);
+    if permille.saturating_sub(last) >= MIN_PERMILLE_STEP || last.saturating_sub(permille) > 0 {
+        return true;
+    }
+    now.duration_since(rendered_at) >= MIN_INTERVAL
 }
 
 /// The `--verbose` line for one file.
@@ -375,5 +586,86 @@ mod tests {
             ),
             "plan: considered 3, would write 2, would skip 1, warnings 1, elapsed 0.0s"
         );
+    }
+
+    #[test]
+    fn overall_lines_carry_the_counter() {
+        assert_eq!(overall_line(0, 4), "[0/4] 0/4 files finished");
+        assert_eq!(overall_line(3, 4), "[3/4] 3/4 files finished");
+    }
+
+    #[test]
+    fn detailed_lines_name_the_wav_and_percent() {
+        assert_eq!(
+            detailed_line(1, 4, Path::new("bank/A2.wav"), 0, 1000),
+            "[1/4] bank/A2.wav 0%"
+        );
+        assert_eq!(
+            detailed_line(1, 4, Path::new("bank/A2.wav"), 425, 1000),
+            "[1/4] bank/A2.wav 42%"
+        );
+        assert_eq!(
+            detailed_line(2, 4, Path::new("bank/B2.wav"), 1000, 1000),
+            "[2/4] bank/B2.wav 100%"
+        );
+    }
+
+    #[test]
+    fn per_frame_events_are_throttled() {
+        let now = Instant::now();
+        // No prior render always renders.
+        assert!(should_render_progress(None, None, false, 1, now));
+        // A new wav always renders.
+        assert!(should_render_progress(
+            Some(now),
+            Some(500),
+            true,
+            500,
+            now
+        ));
+        // Tiny advances within the time slice are swallowed.
+        assert!(!should_render_progress(
+            Some(now),
+            Some(500),
+            false,
+            501,
+            now
+        ));
+        // A 2% step renders even within the slice.
+        assert!(should_render_progress(
+            Some(now),
+            Some(500),
+            false,
+            520,
+            now
+        ));
+        // The slice passing renders even without advance.
+        assert!(should_render_progress(
+            Some(now - Duration::from_millis(200)),
+            Some(500),
+            false,
+            500,
+            now
+        ));
+    }
+
+    #[test]
+    fn progress_opts_in_only_for_detailed_tty_runs() {
+        // Forced TTY: detailed opts into per-file events, overall does not.
+        let detailed = Reporter::build(Verbosity::Normal, 3, true, true);
+        assert!(detailed.wants_file_progress());
+        let overall = Reporter::build(Verbosity::Normal, 3, false, true);
+        assert!(!overall.wants_file_progress());
+        // Piped stderr or quiet never opts in, even with the flag.
+        let piped = Reporter::build(Verbosity::Normal, 3, true, false);
+        assert!(!piped.wants_file_progress());
+        assert_eq!(piped.mode, ProgressMode::Off);
+        let quiet = Reporter::build(Verbosity::Quiet, 3, true, true);
+        assert!(!quiet.wants_file_progress());
+        assert_eq!(quiet.mode, ProgressMode::Off);
+        // The legacy constructor stays silent for piped test output.
+        let legacy = Reporter::new(Verbosity::Normal);
+        assert_eq!(legacy.mode, ProgressMode::Off);
+        assert!(!legacy.wants_file_progress());
     }
 }

@@ -451,6 +451,49 @@ fn verbose_lists_every_file_with_targets_and_reasons() {
     assert_eq!(run.stderr.lines().count(), 3, "{}", run.stderr);
 }
 
+#[test]
+fn progress_is_silent_without_a_tty_and_keeps_stdout_empty() {
+    // The spawned process has piped stderr (no TTY), so the flag must not
+    // add output: logs read exactly as without it.
+    let scratch = Scratch::new("progress-piped");
+    write_tone(&scratch, "bank/A2.wav");
+
+    let plain = run_ok(&scratch.0, &["bank", "--overwrite", "-v"]);
+    let flagged = run_ok(&scratch.0, &["bank", "--overwrite", "-v", "--progress"]);
+    assert!(!flagged.stderr.contains('\r'), "{}", flagged.stderr);
+    assert!(
+        !flagged.stderr.contains("files finished"),
+        "{}",
+        flagged.stderr
+    );
+    // Same completion lines; only the elapsed time may differ.
+    fn strip_elapsed(stderr: &str) -> Vec<&str> {
+        stderr
+            .lines()
+            .map(|line| line.split_once(", elapsed").map_or(line, |(head, _)| head))
+            .collect()
+    }
+    assert_eq!(
+        strip_elapsed(&flagged.stderr),
+        strip_elapsed(&plain.stderr),
+        "no extra output"
+    );
+    assert!(flagged.stdout_is_empty());
+
+    // `-q` and `--dry-run` suppress the line too (here trivially: there is
+    // none without a TTY), while stdout stays empty.
+    let quiet = run_ok(&scratch.0, &["bank", "--progress", "-q"]);
+    assert!(!quiet.stderr.contains('\r'), "{}", quiet.stderr);
+    let dry = run_ok(&scratch.0, &["bank", "--progress", "--dry-run"]);
+    assert!(!dry.stderr.contains('\r'), "{}", dry.stderr);
+    assert!(
+        !dry.stderr.contains("files finished"),
+        "{}",
+        dry.stderr
+    );
+    assert!(dry.stdout_is_empty());
+}
+
 // --- codepage sharing flag --------------------------------------------------
 
 #[test]

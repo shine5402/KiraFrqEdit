@@ -102,7 +102,7 @@ fn run(cli: Cli) -> u8 {
     }
 
     let estimator = WorldEstimator::new(opts.f0);
-    let reporter = Reporter::new(verbosity);
+    let reporter = Reporter::with_progress(verbosity, plan.files.len(), cli.progress);
     match generate(&opts, &estimator, &reporter, &cancel) {
         Ok(summary) => exit_code(&summary),
         Err(error) => {
