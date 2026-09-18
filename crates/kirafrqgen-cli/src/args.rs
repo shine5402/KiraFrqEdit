@@ -61,6 +61,10 @@ pub struct Cli {
     /// Approve prompts without asking.
     #[arg(short = 'y', long)]
     pub yes: bool,
+
+    /// Show live run progress on stderr (TTY only).
+    #[arg(long)]
+    pub progress: bool,
 }
 
 impl Cli {
@@ -257,5 +261,16 @@ mod tests {
         assert!(cli.dry_run);
         assert!(cli.yes);
         assert!(!cli.ensure_japanese_codepage);
+    }
+
+    #[test]
+    fn progress_is_opt_in_and_orthogonal_to_verbosity() {
+        assert!(!parse_ok(&["bank"]).progress);
+        assert!(parse_ok(&["bank", "--progress"]).progress);
+        // No short form, and it combines with either report mode.
+        assert!(parse_ok(&["bank", "--progress", "-v"]).progress);
+        assert!(parse_ok(&["bank", "--progress", "-q"]).progress);
+        let error = parse(&["bank", "--progress=x"]).unwrap_err();
+        assert_eq!(error.exit_code(), 2);
     }
 }
