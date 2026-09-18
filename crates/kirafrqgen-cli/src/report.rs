@@ -3,8 +3,10 @@
 //! Every line goes to stderr; stdout stays empty, reserved for a future
 //! `--json`. The default view names failing and warning files; `--verbose`
 //! adds one line per file including skips and targets; `--quiet` keeps only
-//! failures and drops the summary. Lines stream as reports arrive, and
-//! parallel workers never interleave within a line.
+//! failures and drops the summary. Completion lines stream as reports arrive,
+//! each emitted with a single `eprintln!`, so parallel workers never
+//! interleave within a completion line; status-line writes hold the progress
+//! lock instead.
 
 use std::collections::BTreeSet;
 use std::io::{IsTerminal as _, Write as _};
@@ -173,15 +175,16 @@ impl Progress for Reporter {
             .as_ref()
             .is_none_or(|(current, _, _)| current != wav);
         state.current = Some((wav.to_path_buf(), done, total));
+        let permille = permille_of(done, total);
         if should_render_progress(
             state.last_render,
             state.last_permille,
             wav_changed,
-            permille_of(done, total),
+            permille,
             now,
         ) {
             self.render_locked(&mut state);
-            state.last_permille = Some(permille_of(done, total));
+            state.last_permille = Some(permille);
         }
     }
 
@@ -203,13 +206,13 @@ impl Progress for Reporter {
         for line in &completion {
             eprintln!("{line}");
         }
-        // Re-arm the counter for the remaining files; after the last file
-        // the line stays cleared for the summary.
+        // The finished wav is no longer current: drop it so the re-armed line
+        // falls back to the overall counter until the next wav's events land.
+        // After the last file the line stays cleared for the summary.
+        state.current = None;
+        state.last_permille = None;
         if state.finished < state.total {
             self.render_locked(&mut state);
-        } else {
-            state.current = None;
-            state.last_permille = None;
         }
     }
 
@@ -226,7 +229,7 @@ impl Progress for Reporter {
 
 /// The default TTY status line: the overall `[k/N]` counter.
 pub fn overall_line(finished: usize, total: usize) -> String {
-    format!("[{finished}/{total}] {finished}/{total} files finished")
+    format!("[{finished}/{total}] files finished")
 }
 
 /// The `--progress` status line: the counter plus the current wav and its
@@ -236,9 +239,9 @@ pub fn detailed_line(
     total: usize,
     wav: &Path,
     done: u64,
-    total_permille: u64,
+    fraction_total: u64,
 ) -> String {
-    let pct = permille_of(done, total_permille) * 100 / 1000;
+    let pct = permille_of(done, fraction_total) * 100 / 1000;
     format!("[{finished}/{total}] {} {pct}%", wav.display())
 }
 
@@ -590,8 +593,8 @@ mod tests {
 
     #[test]
     fn overall_lines_carry_the_counter() {
-        assert_eq!(overall_line(0, 4), "[0/4] 0/4 files finished");
-        assert_eq!(overall_line(3, 4), "[3/4] 3/4 files finished");
+        assert_eq!(overall_line(0, 4), "[0/4] files finished");
+        assert_eq!(overall_line(3, 4), "[3/4] files finished");
     }
 
     #[test]
@@ -667,5 +670,53 @@ mod tests {
         let legacy = Reporter::new(Verbosity::Normal);
         assert_eq!(legacy.mode, ProgressMode::Off);
         assert!(!legacy.wants_file_progress());
+    }
+
+    #[test]
+    fn the_status_line_clears_and_re_arms_around_completion_output() {
+        // Forced TTY, detailed, two files. Status frames go to the test
+        // harness's captured stderr; the assertions below are on the state
+        // machine: cleared before completion output, re-armed after.
+        let reporter = Reporter::build(Verbosity::Normal, 2, true, true);
+        let wav = Path::new("bank/A2.wav");
+        reporter.file_started(wav);
+        {
+            let state = reporter.state.lock().unwrap();
+            assert!(state.current.is_some());
+            assert!(state.last_len > 0, "started renders a frame");
+        }
+        // A clean file prints no completion line under Normal, but the
+        // counter still advances through clear then re-arm.
+        reporter.file_finished(&report("bank/A2.wav"));
+        {
+            let state = reporter.state.lock().unwrap();
+            assert_eq!(state.finished, 1);
+            assert!(state.current.is_none(), "the finished wav drops out");
+            assert!(state.last_len > 0, "the counter re-arms");
+            assert_eq!(
+                Reporter::status_line(&state).unwrap(),
+                "[1/2] files finished"
+            );
+        }
+        reporter.file_finished(&report("bank/B2.wav"));
+        {
+            let state = reporter.state.lock().unwrap();
+            assert_eq!(state.finished, 2);
+            assert_eq!(state.last_len, 0, "the last file stays cleared");
+        }
+        reporter.finished(&RunSummary::default());
+        {
+            let state = reporter.state.lock().unwrap();
+            assert_eq!(state.last_len, 0, "the summary clears the line");
+        }
+
+        // Overall mode steps the bare counter the same way.
+        let overall = Reporter::build(Verbosity::Normal, 1, false, true);
+        overall.file_finished(&report("bank/A2.wav"));
+        {
+            let state = overall.state.lock().unwrap();
+            assert_eq!(state.finished, 1);
+            assert_eq!(state.last_len, 0, "a single file stays cleared");
+        }
     }
 }
