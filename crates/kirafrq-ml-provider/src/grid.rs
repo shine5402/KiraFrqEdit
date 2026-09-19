@@ -48,6 +48,15 @@ pub const RMVPE_CONTRACT: ModelContract = ModelContract {
     origin_s: 0.0,
 };
 
+/// SwiftF0's contract (#59): 16 kHz, 256-sample (16 ms) hop, and a
+/// `+127.5`-sample frame origin (`(1024 - 1) / 2 - 384`) the graph's
+/// symmetric STFT padding imposes.
+pub const SWIFTF0_CONTRACT: ModelContract = ModelContract {
+    sample_rate: 16_000,
+    hop_samples: 256,
+    origin_s: 127.5 / 16_000.0,
+};
+
 /// A native-grid f0 contour: one value per native frame, `0.0` marking
 /// unvoiced (#53). Non-finite and non-positive values also read unvoiced.
 #[derive(Debug, Clone, PartialEq)]
@@ -138,6 +147,19 @@ mod tests {
 
     fn approx(got: f64, want: f64) {
         assert!((got - want).abs() < 1e-9, "expected {want}, got {got}");
+    }
+
+    #[test]
+    fn the_swiftf0_contract_is_16k_16ms_with_a_127_5_sample_origin() {
+        assert_eq!(SWIFTF0_CONTRACT.sample_rate, 16_000);
+        assert_eq!(SWIFTF0_CONTRACT.hop_samples, 256);
+        approx(SWIFTF0_CONTRACT.frame_period_s(), 0.016);
+        for frame in 0..4 {
+            approx(
+                SWIFTF0_CONTRACT.frame_time_s(frame),
+                (127.5 + frame as f64 * 256.0) / 16_000.0,
+            );
+        }
     }
 
     #[test]

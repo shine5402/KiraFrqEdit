@@ -9,7 +9,7 @@
 //!
 //! Estimators are selected through [`Estimator`] and built by
 //! [`build_estimator`] (the feature-gated factory): the WORLD pair always,
-//! plus RMVPE when the `ml` feature is on (#48/#49).
+//! plus RMVPE and SwiftF0 when the `ml` feature is on (#48/#49/#69).
 
 pub mod llsm;
 
@@ -30,14 +30,15 @@ use std::sync::atomic::AtomicBool;
 
 /// f0 estimator selection for [`F0Config`].
 ///
-/// Data-only: the ML variant names no provider type, so the compat build
-/// (`--no-default-features`) compiles it too and rejects it at
+/// Data-only: the ML variants name no provider type, so the compat build
+/// (`--no-default-features`) compiles them too and rejects them at
 /// [`build_estimator`] time (#48).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Estimator {
     Dio,
     Harvest,
     Rmvpe,
+    SwiftF0,
 }
 
 impl Estimator {
@@ -59,6 +60,9 @@ impl Estimator {
             Estimator::Rmvpe => {
                 "Fast and reliable ML based estimator. Requires model to be present."
             }
+            Estimator::SwiftF0 => {
+                "Fast and reliable ML based estimator. Comes with a bundled model."
+            }
         }
     }
 }
@@ -79,11 +83,12 @@ pub fn default_estimator(ml_available: bool) -> Estimator {
 /// [`GenerateOptions`] and hands a clone to the provider.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MlConfig {
-    /// The `rmvpe.onnx` file; `None` resolves at factory time (executable
-    /// directory, then `KIRAFRQ_ML_DIR`).
+    /// An explicit model file override; `None` resolves by filename
+    /// (`rmvpe.onnx`, `swiftf0.onnx`) via the executable directory, then
+    /// `KIRAFRQ_ML_DIR`, then SwiftF0's bundled fallback.
     pub model_path: Option<PathBuf>,
     /// The #53 confidence override; `None` uses the model's own default
-    /// (RMVPE 0.03). Internal, no CLI/GUI knob.
+    /// (RMVPE 0.03, SwiftF0 0.9). Internal, no CLI/GUI knob.
     pub confidence_threshold: Option<f64>,
 }
 
@@ -102,8 +107,13 @@ pub struct F0Config {
     /// Internal, kept out of the headline API.
     #[doc(hidden)]
     pub energy_gate_ratio: f64,
-    /// The ML estimator's model and threshold (#48/#53); consulted only when
-    /// [`Estimator::Rmvpe`] is selected.
+    /// The aperiodicity gate's threshold (#64): a voiced Harvest frame whose
+    /// raw D4C LoveTrain statistic is below this is forced unvoiced. Internal,
+    /// kept out of the headline API.
+    #[doc(hidden)]
+    pub aperiodicity_gate_threshold: f64,
+    /// The ML estimators' model and threshold (#48/#53); consulted only when
+    /// [`Estimator::Rmvpe`] or [`Estimator::SwiftF0`] is selected.
     pub ml: MlConfig,
 }
 
@@ -117,6 +127,7 @@ impl Default for F0Config {
             stone_mask: true,
             world_quirks: true,
             energy_gate_ratio: 0.05,
+            aperiodicity_gate_threshold: 0.85,
             ml: MlConfig::default(),
         }
     }
@@ -163,6 +174,20 @@ pub trait F0Estimator: Send + Sync {
     fn supports_stonemask(&self) -> bool {
         false
     }
+
+    /// The raw D4C LoveTrain aperiodicity statistic per frame, for the tuned
+    /// WORLD path's aperiodicity gate (#64). `Ok(None)` means the estimator
+    /// has no such statistic (the ML tier, or a WORLD estimator that does not
+    /// compute it), so the gate is skipped. The pipeline only asks on the
+    /// Harvest path; a failure is a per-file failure like StoneMask.
+    fn aperiodicity0(
+        &self,
+        _samples: &[f64],
+        _sample_rate: u32,
+        _track: &F0Track,
+    ) -> Result<Option<Vec<f64>>, GeneratorError> {
+        Ok(None)
+    }
 }
 
 /// [`F0Estimator`] backed by kirafrq-world-binding (DIO / Harvest / StoneMask).
@@ -187,11 +212,13 @@ impl F0Estimator for WorldEstimator {
         let estimator = match self.config.estimator {
             Estimator::Dio => kirafrq_world_binding::Estimator::Dio,
             Estimator::Harvest => kirafrq_world_binding::Estimator::Harvest,
-            // The factory rejects RMVPE before a WorldEstimator is built.
-            Estimator::Rmvpe => {
-                return Err(GeneratorError::Config(
-                    "RMVPE is not a WORLD estimator".to_string(),
-                ));
+            // The factory rejects the ML estimators before a WorldEstimator
+            // is built.
+            Estimator::Rmvpe | Estimator::SwiftF0 => {
+                return Err(GeneratorError::Config(format!(
+                    "the {:?} ML estimator is not a WORLD estimator",
+                    self.config.estimator
+                )));
             }
         };
         let options = kirafrq_world_binding::F0Options {
@@ -238,24 +265,51 @@ impl F0Estimator for WorldEstimator {
         Ok(())
     }
 
+    fn aperiodicity0(
+        &self,
+        samples: &[f64],
+        sample_rate: u32,
+        track: &F0Track,
+    ) -> Result<Option<Vec<f64>>, GeneratorError> {
+        let statistic = kirafrq_world_binding::d4c_aperiodicity0(
+            samples,
+            sample_rate,
+            &track.temporal_positions,
+            &track.f0_hz,
+        )
+        .map_err(|error| GeneratorError::Estimation(error.to_string()))?;
+        Ok(Some(statistic))
+    }
+
     fn supports_stonemask(&self) -> bool {
         true
     }
 }
 
-/// The RMVPE estimator over the ML provider (`ml` builds only).
+/// The ML estimator over the provider (`ml` builds only): RMVPE or SwiftF0.
 #[cfg(feature = "ml")]
 pub struct MlEstimator {
-    inner: kirafrq_ml_provider::rmvpe::Rmvpe,
-    model_path: PathBuf,
+    inner: MlModel,
+}
+
+#[cfg(feature = "ml")]
+enum MlModel {
+    Rmvpe(kirafrq_ml_provider::rmvpe::Rmvpe),
+    SwiftF0(kirafrq_ml_provider::swiftf0::SwiftF0),
 }
 
 #[cfg(feature = "ml")]
 impl MlEstimator {
-    /// The model path this estimator will load, for callers that surface it
-    /// (the CLI's error hint, the GUI's availability check).
-    pub fn model_path(&self) -> &Path {
-        &self.model_path
+    fn rmvpe(inner: kirafrq_ml_provider::rmvpe::Rmvpe) -> Self {
+        Self {
+            inner: MlModel::Rmvpe(inner),
+        }
+    }
+
+    fn swiftf0(inner: kirafrq_ml_provider::swiftf0::SwiftF0) -> Self {
+        Self {
+            inner: MlModel::SwiftF0(inner),
+        }
     }
 }
 
@@ -272,10 +326,11 @@ impl F0Estimator for MlEstimator {
         let progress = progress
             .as_ref()
             .map(|progress| progress as &dyn kirafrq_ml_provider::ProgressObserver);
-        let track = self
-            .inner
-            .estimate(samples, progress)
-            .map_err(|error| GeneratorError::Estimation(error.to_string()))?;
+        let track = match &self.inner {
+            MlModel::Rmvpe(inner) => inner.estimate(samples, progress),
+            MlModel::SwiftF0(inner) => inner.estimate(samples, progress),
+        }
+        .map_err(|error| GeneratorError::Estimation(error.to_string()))?;
         Ok(F0Track {
             frame_period_ms: track.frame_period_ms,
             temporal_positions: track.temporal_positions,
@@ -296,10 +351,10 @@ impl kirafrq_ml_provider::ProgressObserver for MlProgress<'_> {
     }
 }
 
-/// Build the estimator for `config`, resolving the ML model file up front
-/// (#48/#49): selecting RMVPE without the `ml` feature or without a model
-/// file is an early [`GeneratorError::Config`] naming the expected file, the
-/// lookup directories and a download hint.
+/// Build the estimator for `config`, resolving the ML model up front
+/// (#48/#49/#69): selecting an ML estimator without the `ml` feature, without
+/// a resolvable RMVPE file, or with a missing explicit model is an early
+/// [`GeneratorError::Config`], not a per-file failure.
 ///
 /// `jobs` is the run's single "cores" knob ([`GenerateOptions::jobs`]); the
 /// ML session maps it onto ONNX Runtime's intra-op threads.
@@ -310,6 +365,36 @@ pub fn build_estimator(
     match config.estimator {
         Estimator::Dio | Estimator::Harvest => Ok(Box::new(WorldEstimator::new(config.clone()))),
         Estimator::Rmvpe => build_ml_estimator(config, jobs),
+        Estimator::SwiftF0 => build_swiftf0_estimator(config, jobs),
+    }
+}
+
+/// An explicit `model_path` override that exists, else `None` so the caller
+/// resolves by filename. A set-but-missing path is an early config error
+/// naming the estimator.
+#[cfg(feature = "ml")]
+fn explicit_model_path(
+    config: &F0Config,
+    estimator: &str,
+) -> Result<Option<PathBuf>, GeneratorError> {
+    match &config.ml.model_path {
+        Some(path) if !path.is_file() => Err(GeneratorError::Config(format!(
+            "the {estimator} model file {} does not exist",
+            path.display()
+        ))),
+        Some(path) => Ok(Some(path.clone())),
+        None => Ok(None),
+    }
+}
+
+/// The #53 policy for an ML model: the config's range and an optional
+/// threshold override, else the model's own default.
+#[cfg(feature = "ml")]
+fn ml_policy(config: &F0Config, default_threshold: f64) -> kirafrq_ml_provider::UvPolicy {
+    kirafrq_ml_provider::UvPolicy {
+        confidence_threshold: config.ml.confidence_threshold.unwrap_or(default_threshold),
+        floor_hz: config.floor_hz,
+        ceiling_hz: config.ceiling_hz,
     }
 }
 
@@ -318,34 +403,45 @@ fn build_ml_estimator(
     config: &F0Config,
     jobs: usize,
 ) -> Result<Box<dyn F0Estimator>, GeneratorError> {
-    let model_path = match &config.ml.model_path {
-        Some(path) => {
-            if !path.is_file() {
-                return Err(GeneratorError::Config(format!(
-                    "the ML model file {} does not exist",
-                    path.display()
-                )));
-            }
-            path.clone()
-        }
+    let model_path = match explicit_model_path(config, "ML")? {
+        Some(path) => path,
         None => kirafrq_ml_provider::resolve_model()
             .map_err(|error| GeneratorError::Config(format!("{error}; {ML_DOWNLOAD_HINT}")))?,
     };
-    let policy = kirafrq_ml_provider::UvPolicy {
-        confidence_threshold: config
-            .ml
-            .confidence_threshold
-            .unwrap_or(kirafrq_ml_provider::RMVPE_DEFAULT_CONFIDENCE_THRESHOLD),
-        floor_hz: config.floor_hz,
-        ceiling_hz: config.ceiling_hz,
-    };
-    let inner = kirafrq_ml_provider::rmvpe::Rmvpe::new(model_path.clone(), policy, jobs);
+    let policy = ml_policy(
+        config,
+        kirafrq_ml_provider::RMVPE_DEFAULT_CONFIDENCE_THRESHOLD,
+    );
+    let inner = kirafrq_ml_provider::rmvpe::Rmvpe::new(model_path, policy, jobs);
     // Load the session now so an unloadable model is the same early config
     // error as a missing one (#49), not a per-file failure.
     inner
         .ensure_session()
         .map_err(|error| GeneratorError::Config(format!("{error}; {ML_DOWNLOAD_HINT}")))?;
-    Ok(Box::new(MlEstimator { inner, model_path }))
+    Ok(Box::new(MlEstimator::rmvpe(inner)))
+}
+
+/// Build SwiftF0 (#69): an explicit `model_path` overrides the filename
+/// lookup, which falls back to the bundled MIT model, so a modern build never
+/// needs a download.
+#[cfg(feature = "ml")]
+fn build_swiftf0_estimator(
+    config: &F0Config,
+    jobs: usize,
+) -> Result<Box<dyn F0Estimator>, GeneratorError> {
+    let source = match explicit_model_path(config, "SwiftF0")? {
+        Some(path) => kirafrq_ml_provider::ModelSource::File(path),
+        None => kirafrq_ml_provider::swiftf0::resolve_source(),
+    };
+    let policy = ml_policy(
+        config,
+        kirafrq_ml_provider::SWIFTF0_DEFAULT_CONFIDENCE_THRESHOLD,
+    );
+    let inner = kirafrq_ml_provider::swiftf0::SwiftF0::new(source, policy, jobs);
+    inner
+        .ensure_session()
+        .map_err(|error| GeneratorError::Config(error.to_string()))?;
+    Ok(Box::new(MlEstimator::swiftf0(inner)))
 }
 
 #[cfg(not(feature = "ml"))]
@@ -353,10 +449,22 @@ fn build_ml_estimator(
     _config: &F0Config,
     _jobs: usize,
 ) -> Result<Box<dyn F0Estimator>, GeneratorError> {
-    Err(GeneratorError::Config(format!(
-        "this build has no ML estimator support (compiled without the `ml` feature); \
-         {ML_DOWNLOAD_HINT}"
-    )))
+    Err(no_ml_support())
+}
+
+#[cfg(not(feature = "ml"))]
+fn build_swiftf0_estimator(
+    _config: &F0Config,
+    _jobs: usize,
+) -> Result<Box<dyn F0Estimator>, GeneratorError> {
+    Err(no_ml_support())
+}
+
+#[cfg(not(feature = "ml"))]
+fn no_ml_support() -> GeneratorError {
+    GeneratorError::Config(
+        "this build has no ML estimator support (compiled without the `ml` feature)".to_string(),
+    )
 }
 
 /// The download hint the CLI and GUI share for an unavailable ML model (#48).
@@ -563,5 +671,29 @@ impl std::error::Error for GeneratorError {
             GeneratorError::Scan { error, .. } => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_world_estimator_exposes_the_d4c_statistic_per_frame() {
+        let sample_rate = 44_100u32;
+        let samples: Vec<f64> = (0..sample_rate)
+            .map(|n| (2.0 * std::f64::consts::PI * 220.0 * n as f64 / sample_rate as f64).sin())
+            .collect();
+        let estimator = WorldEstimator::new(F0Config::default());
+        let track = estimator
+            .estimate(&samples, sample_rate, crate::table::frame_period_ms(), None)
+            .unwrap();
+
+        let statistic = estimator
+            .aperiodicity0(&samples, sample_rate, &track)
+            .unwrap()
+            .expect("the WORLD estimator provides the statistic");
+
+        assert_eq!(statistic.len(), track.f0_hz.len());
     }
 }

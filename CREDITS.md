@@ -9,13 +9,15 @@ texts), and the GUI's Help > Credits window shows all of it.
 Pitch analysis is [WORLD](https://github.com/mmorise/World) (DIO / Harvest, StoneMask
 refinement) by M. Morise and contributors, vendored under `third_party/World`.
 
-The ML estimator runs [RMVPE](https://github.com/Dream-High/RMVPE) by H. Wei, X. Cao, T. Dan
-and Y. Chen ([Interspeech 2023](https://arxiv.org/abs/2306.15412)) through
+The ML estimators run [RMVPE](https://github.com/Dream-High/RMVPE) by H. Wei, X. Cao, T. Dan
+and Y. Chen ([Interspeech 2023](https://arxiv.org/abs/2306.15412)) and
+[SwiftF0](https://github.com/lars76/swift-f0) by Lars Nieradzik
+([arXiv:2508.18440](https://arxiv.org/abs/2508.18440), MIT) through
 [ONNX Runtime](https://onnxruntime.ai/) (MIT), linked via the
 [`ort`](https://github.com/pykeio/ort) crate.
 
 The RMVPE model weights are not redistributed with this project; you supply `rmvpe.onnx`
-yourself (see the README).
+yourself. SwiftF0 ships its model bundled (see the README).
 
 ## License
 

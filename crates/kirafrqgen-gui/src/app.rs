@@ -459,6 +459,9 @@ impl KiraFrqGenApp {
                              or in the directory named by KIRAFRQ_ML_DIR, then restart.",
                         );
                     }
+                    // #69: SwiftF0 ships a bundled model, so it is always
+                    // selectable in a modern build.
+                    ui.radio_value(&mut self.estimator, Estimator::SwiftF0, "SwiftF0");
                 }
             });
             ui.label(RichText::new(self.estimator.description()).weak());

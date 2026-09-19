@@ -35,16 +35,16 @@ refinement — the traditional DSP estimators — or an **ML estimator**. _Avoid
 
 ## ML estimator
 
-An f0 estimator backed by a neural model rather than a DSP algorithm; the model file is supplied
-by the user. Its voicing comes from the model's own confidence, not from the energy voicing gate,
-and it has no StoneMask stage. RMVPE is the supported one. _Avoid_: calling it a "resampler" or
-"engine".
+An f0 estimator backed by a neural model rather than a DSP algorithm. Its voicing comes from the
+model's own confidence, not from the energy voicing gate, and it has no StoneMask stage. RMVPE and
+SwiftF0 are the supported ones. _Avoid_: calling it a "resampler" or "engine".
 
 ## Model file
 
-The user-supplied weights file an ML estimator loads, `rmvpe.onnx`, looked up in the executable's
-directory and then `KIRAFRQ_ML_DIR`. Its presence is what makes the ML tier available: no file, no
-ML option, and selecting an ML estimator without one is an error, not a fallback to WORLD.
+The weights file an ML estimator loads. RMVPE's `rmvpe.onnx` is user-supplied, looked up in the
+executable's directory and then `KIRAFRQ_ML_DIR`; its presence is what makes the RMVPE option
+available, and selecting it without one is an error, not a fallback to WORLD. SwiftF0's
+`swiftf0.onnx` uses the same lookup as an override but ships bundled, so no file is needed.
 _Avoid_: "weights" alone when the on-disk artifact is meant.
 
 ## Spurious voicing
@@ -60,6 +60,15 @@ its per-frame amplitude clears a relative share of the file's voiced-frame loudn
 computed amplitude, not one read from an existing frq). It targets the quiet noise-floor class —
 breath and onsets at speech level pass through. _Avoid_: bare "gate" — an aperiodicity gate is a
 different stage.
+
+## Aperiodicity gate
+
+The second workaround the tuned WORLD path applies to spurious voicing, on Harvest only and on top
+of the energy voicing gate: a frame is kept voiced only when its raw D4C LoveTrain aperiodicity
+statistic clears 0.85. It targets the louder aperiodic residuals — onsets, transitions and voiced
+consonants — that the energy gate's loudness test lets through. Both thresholds are internal, with
+no user knob. _Avoid_: "D4C gate" or bare "gate" alone; the full term disambiguates it from the
+energy voicing gate.
 
 ## Resampler
 
