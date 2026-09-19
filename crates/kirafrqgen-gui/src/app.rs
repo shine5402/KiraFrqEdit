@@ -15,7 +15,7 @@ use eframe::egui::{
 use egui_phosphor::regular as icons;
 use kirafrqgen_core::{
     CancelToken, Estimator, F0Config, FileReport, GenerateOptions, Progress, RunSummary, Sharing,
-    Target, WorldEstimator, generate_wavs, plan,
+    Target, build_estimator, generate_wavs, ml_available, plan,
 };
 
 use crate::run::{Row, RunState, Status};
@@ -170,9 +170,23 @@ impl Progress for GuiProgress {
     }
 }
 
+/// The capability-aware default (#49): RMVPE when a model is available, else
+/// DIO. Kept pure so the choice is testable without a model file.
+fn default_estimator(ml_available: bool) -> Estimator {
+    if ml_available {
+        Estimator::Rmvpe
+    } else {
+        Estimator::Dio
+    }
+}
+
 pub struct KiraFrqGenApp {
     // Options (session-only).
     estimator: Estimator,
+    /// The capability-aware default resolved once at startup (#49): RMVPE
+    /// when a model file is available, else DIO.
+    ml_available: bool,
+    world_quirks: bool,
     targets: Targets,
     delete_llsm: bool,
     japanese_codepage: bool,
@@ -199,8 +213,11 @@ impl KiraFrqGenApp {
         let max_cores = std::thread::available_parallelism()
             .map(|cores| cores.get() as u32)
             .unwrap_or(4);
+        let ml_available = ml_available(&F0Config::default());
         Self {
-            estimator: Estimator::Harvest,
+            estimator: default_estimator(ml_available),
+            ml_available,
+            world_quirks: true,
             targets: Targets {
                 frq: true,
                 pmk: false,
@@ -229,6 +246,12 @@ impl KiraFrqGenApp {
 
     fn is_running(&self) -> bool {
         self.run_state().is_some_and(|state| state.is_running())
+    }
+
+    /// Whether the selected estimator is one of the WORLD pair: the WORLD
+    /// quirks toggle applies to those only (#49).
+    fn is_world_estimator(&self) -> bool {
+        matches!(self.estimator, Estimator::Dio | Estimator::Harvest)
     }
 
     fn run_ended(&self) -> bool {
@@ -268,6 +291,7 @@ impl KiraFrqGenApp {
             overwrite: true,
             f0: F0Config {
                 estimator: self.estimator,
+                world_quirks: self.world_quirks,
                 ..F0Config::default()
             },
             jobs: if self.cores_auto {
@@ -351,8 +375,12 @@ impl KiraFrqGenApp {
         let worker_state = Arc::clone(&state);
         let worker_stop = Arc::clone(&stop);
         std::thread::spawn(move || {
-            let estimator = WorldEstimator::new(opts.f0);
-            let outcome = generate_wavs(&opts, &wavs, &estimator, &progress, &worker_stop);
+            let outcome = match build_estimator(&opts.f0, opts.jobs) {
+                Ok(estimator) => {
+                    generate_wavs(&opts, &wavs, estimator.as_ref(), &progress, &worker_stop)
+                }
+                Err(error) => Err(error),
+            };
             let mut state = lock(&worker_state);
             match outcome {
                 Ok(summary) => state.finished(&summary),
@@ -381,13 +409,42 @@ impl KiraFrqGenApp {
             ui.horizontal(|ui| {
                 ui.radio_value(&mut self.estimator, Estimator::Harvest, "Harvest");
                 ui.radio_value(&mut self.estimator, Estimator::Dio, "DIO");
+                let rmvpe = ui.add_enabled(
+                    self.ml_available,
+                    egui::RadioButton::new(self.estimator == Estimator::Rmvpe, "RMVPE"),
+                );
+                if rmvpe.clicked() {
+                    self.estimator = Estimator::Rmvpe;
+                }
+                if !self.ml_available {
+                    rmvpe.on_hover_text(
+                        "RMVPE needs a model file. Put `rmvpe.onnx` next to the executable \
+                         or in the directory named by KIRAFRQ_ML_DIR, then restart.",
+                    );
+                }
             });
-            ui.label(
-                RichText::new(match self.estimator {
-                    Estimator::Harvest => "Robust, but slow.",
-                    Estimator::Dio => "Faster, but may struggle on less-than-ideal recordings.",
-                })
-                .weak(),
+            let description = match self.estimator {
+                Estimator::Harvest => {
+                    "Robust, but slow. A traditional DSP-based algorithm from WORLD."
+                }
+                Estimator::Dio => {
+                    "Fast, but may struggle on less-than-ideal recordings. \
+                     A traditional DSP-based algorithm from WORLD."
+                }
+                Estimator::Rmvpe => {
+                    "Fast and reliable ML based estimator. Requires model to be present."
+                }
+            };
+            ui.label(RichText::new(description).weak());
+
+            ui.add_space(8.0);
+            let quirks = ui.add_enabled(
+                self.is_world_estimator(),
+                egui::Checkbox::new(&mut self.world_quirks, "WORLD quirks"),
+            );
+            quirks.on_hover_text(
+                "The tuned WORLD path: a relative energy voicing gate that suppresses \
+                 spurious voicing over breath and noise. Applies to the WORLD estimators only.",
             );
 
             ui.add_space(8.0);
@@ -1266,6 +1323,12 @@ mod tests {
         let last_rim = points[points.len() - 1];
         assert!(last_rim.x < center.x);
         assert!((last_rim.y - center.y).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_default_estimator_follows_the_ml_capability() {
+        assert_eq!(default_estimator(true), Estimator::Rmvpe);
+        assert_eq!(default_estimator(false), Estimator::Dio);
     }
 
     #[test]

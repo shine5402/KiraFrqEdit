@@ -22,9 +22,14 @@ pub struct Cli {
     #[arg(long, value_delimiter = ',', value_name = "FORMAT")]
     pub format: Vec<FormatArg>,
 
-    /// f0 estimator for every wav.
-    #[arg(long, value_enum, default_value_t = EstimatorArg::Harvest)]
-    pub estimator: EstimatorArg,
+    /// f0 estimator for every wav. Defaults to rmvpe when a model is present
+    /// in an ML-enabled build, else dio.
+    #[arg(long, value_enum)]
+    pub estimator: Option<EstimatorArg>,
+
+    /// Disable the tuned WORLD path (the energy voicing gate); WORLD only.
+    #[arg(long)]
+    pub no_world_quirks: bool,
 
     /// Regenerate tables that already exist.
     #[arg(long)]
@@ -77,11 +82,27 @@ impl Cli {
         targets
     }
 
-    /// The standing f0 defaults (#7/#8) with the chosen estimator.
+    /// The standing f0 defaults (#7/#8) with the resolved estimator and the
+    /// WORLD-quirks toggle (#49).
     pub fn f0_config(&self) -> F0Config {
         F0Config {
-            estimator: self.estimator.into(),
+            estimator: self.estimator(),
+            world_quirks: !self.no_world_quirks,
             ..F0Config::default()
+        }
+    }
+
+    /// The capability-aware default (#49): RMVPE when the build has ML and a
+    /// model file resolves, else DIO. An explicit `--estimator` always wins.
+    pub fn estimator(&self) -> Estimator {
+        if let Some(explicit) = self.estimator {
+            return explicit.into();
+        }
+        let default = F0Config::default();
+        if kirafrqgen_core::ml_available(&default) {
+            Estimator::Rmvpe
+        } else {
+            Estimator::Dio
         }
     }
 
@@ -117,8 +138,13 @@ impl From<FormatArg> for Target {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum EstimatorArg {
-    Harvest,
+    /// Fast, but may struggle on less-than-ideal recordings. A traditional
+    /// DSP-based algorithm from WORLD.
     Dio,
+    /// Robust, but slow. A traditional DSP-based algorithm from WORLD.
+    Harvest,
+    /// Fast and reliable ML based estimator. Requires model to be present.
+    Rmvpe,
 }
 
 impl From<EstimatorArg> for Estimator {
@@ -126,6 +152,7 @@ impl From<EstimatorArg> for Estimator {
         match value {
             EstimatorArg::Harvest => Estimator::Harvest,
             EstimatorArg::Dio => Estimator::Dio,
+            EstimatorArg::Rmvpe => Estimator::Rmvpe,
         }
     }
 }
@@ -199,14 +226,46 @@ mod tests {
     }
 
     #[test]
-    fn estimator_defaults_to_harvest_with_dio_opt_in() {
-        assert_eq!(parse_ok(&["bank"]).estimator, EstimatorArg::Harvest);
+    fn estimator_is_unset_by_default_and_accepts_every_name() {
+        assert_eq!(parse_ok(&["bank"]).estimator, None);
         assert_eq!(
             parse_ok(&["bank", "--estimator", "dio"]).estimator,
-            EstimatorArg::Dio
+            Some(EstimatorArg::Dio)
+        );
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "harvest"]).estimator,
+            Some(EstimatorArg::Harvest)
+        );
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "rmvpe"]).estimator,
+            Some(EstimatorArg::Rmvpe)
         );
         let error = parse(&["bank", "--estimator", "swipe"]).unwrap_err();
         assert_eq!(error.exit_code(), 2);
+    }
+
+    #[test]
+    fn an_explicit_estimator_always_wins_over_the_default() {
+        // The capability-aware default (#49) resolves to DIO here (no model
+        // in the test environment); an explicit flag must beat it.
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "rmvpe"]).estimator(),
+            Estimator::Rmvpe
+        );
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "harvest"]).estimator(),
+            Estimator::Harvest
+        );
+    }
+
+    #[test]
+    fn world_quirks_default_on_and_no_world_quirks_turns_them_off() {
+        assert!(parse_ok(&["bank"]).f0_config().world_quirks);
+        assert!(
+            !parse_ok(&["bank", "--no-world-quirks"])
+                .f0_config()
+                .world_quirks
+        );
     }
 
     #[test]

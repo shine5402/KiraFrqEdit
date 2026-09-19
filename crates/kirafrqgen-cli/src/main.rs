@@ -11,7 +11,7 @@ use kirafrqgen_cli::args::Cli;
 use kirafrqgen_cli::report::{self, Reporter, Verbosity};
 use kirafrqgen_cli::{exit_code, prompt};
 use kirafrqgen_core::{
-    CancelToken, GenerateOptions, Sharing, Target, WorldEstimator, generate, plan,
+    CancelToken, Estimator, GenerateOptions, Sharing, Target, build_estimator, generate, plan,
 };
 
 fn main() -> ExitCode {
@@ -101,15 +101,41 @@ fn run(cli: Cli) -> u8 {
         };
     }
 
-    let estimator = WorldEstimator::new(opts.f0);
+    // The estimator factory resolves the ML model up front (#49): a missing
+    // model is a single early error, before any file is touched. The quirks
+    // warning fires first, so an explicit switch is always acknowledged.
+    if let Some(warning) = world_quirks_warning(&cli, verbosity) {
+        eprintln!("warning: {warning}");
+    }
+    let estimator = match build_estimator(&opts.f0, opts.jobs) {
+        Ok(estimator) => estimator,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
+    };
     let reporter = Reporter::with_progress(verbosity, plan.files.len(), cli.progress);
-    match generate(&opts, &estimator, &reporter, &cancel) {
+    match generate(&opts, estimator.as_ref(), &reporter, &cancel) {
         Ok(summary) => exit_code(&summary),
         Err(error) => {
             eprintln!("error: {error}");
             1
         }
     }
+}
+
+/// #49: an explicit WORLD-quirks switch alongside a non-WORLD estimator is a
+/// warned no-op; the run continues.
+fn world_quirks_warning(cli: &Cli, verbosity: Verbosity) -> Option<String> {
+    if !cli.no_world_quirks || verbosity == Verbosity::Quiet {
+        return None;
+    }
+    if cli.estimator() == Estimator::Rmvpe {
+        return Some(
+            "--no-world-quirks has no effect: it applies to the WORLD estimators only".to_string(),
+        );
+    }
+    None
 }
 
 /// `--ensure-japanese-codepage` (#10/#12): mrq-only, a silent no-op on code

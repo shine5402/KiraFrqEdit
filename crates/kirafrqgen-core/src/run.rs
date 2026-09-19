@@ -25,8 +25,8 @@ use crate::scan::scan_wavs;
 use crate::table::{SAMPLE_RATE, build_table, frame_period_ms};
 use crate::voicing;
 use crate::{
-    CancelToken, F0Estimator, FilePlan, FileReport, GenerateOptions, GeneratorError, Progress,
-    RunPlan, RunSummary, Target, llsm,
+    CancelToken, Estimator, F0Estimator, FilePlan, FileReport, GenerateOptions, GeneratorError,
+    Progress, RunPlan, RunSummary, Target, llsm,
 };
 
 /// Run the generation pass over `opts.root` (#7, #8, #10, #11, #12).
@@ -239,11 +239,13 @@ fn process_wav(
 
     // One observer across both phases: the estimate latch carries into the
     // refine half, so the composed fraction never jumps back. Reporters that
-    // ignore progress skip the hook entirely (#34).
+    // ignore progress skip the hook entirely (#34). An estimator without
+    // StoneMask (#48) never has a refine half.
+    let refine = opts.f0.stone_mask && estimator.supports_stonemask();
     let observer = progress.wants_file_progress().then(|| FileObserver {
         progress,
         wav: wav.to_path_buf(),
-        refine: opts.f0.stone_mask,
+        refine,
         estimate: AtomicU64::new(0),
         refined: AtomicU64::new(0),
     });
@@ -260,7 +262,7 @@ fn process_wav(
                 return WavResult { report, mrq: None };
             }
         };
-    if opts.f0.stone_mask
+    if refine
         && let Err(error) =
             estimator.refine_stonemask(&decoded.samples, SAMPLE_RATE, &mut track, probe)
     {
@@ -269,9 +271,10 @@ fn process_wav(
         return WavResult { report, mrq: None };
     }
 
-    // The tuned path's post-pass (#54): estimator-agnostic, so any estimator
-    // that voices noise gets its quiet frames forced unvoiced.
-    if opts.f0.world_quirks {
+    // The tuned WORLD path's post-pass (#54): applied to both WORLD
+    // estimators. The ML estimator is excluded (#53): its confidence gate is
+    // its voicing policy, and the WORLD energy gate is a WORLD workaround.
+    if opts.f0.world_quirks && is_world(opts.f0.estimator) {
         voicing::apply_energy_gate(&decoded.samples, &mut track, opts.f0.energy_gate_ratio);
     }
 
@@ -617,6 +620,12 @@ fn validate(opts: &GenerateOptions) -> Result<(), GeneratorError> {
         ));
     }
     Ok(())
+}
+
+/// Whether `estimator` is a WORLD estimator: the energy voicing gate (#54)
+/// applies to the WORLD pair only (#53).
+fn is_world(estimator: Estimator) -> bool {
+    matches!(estimator, Estimator::Dio | Estimator::Harvest)
 }
 
 fn build_pool(jobs: usize) -> Result<rayon::ThreadPool, GeneratorError> {

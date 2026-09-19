@@ -30,8 +30,22 @@ consonants are loud but pitchless.
 
 ## f0 estimator
 
-The algorithm that estimates f0 from audio: WORLD's DIO (fast) or Harvest (better), with StoneMask
-refinement. _Avoid_: "engine" for these.
+The algorithm that estimates f0 from audio: WORLD's DIO (fast) or Harvest (better) with StoneMask
+refinement — the traditional DSP estimators — or an **ML estimator**. Estimator choice is
+first-class: the pipeline talks to them through one seam. _Avoid_: "engine" for these.
+
+## ML estimator
+
+An f0 estimator backed by a neural model rather than a DSP algorithm; the model file is supplied
+by the user and never redistributed with KiraFrqGen. Its voicing comes from the model's own
+confidence, not from the energy voicing gate, and it has no StoneMask stage. RMVPE is the
+supported one. _Avoid_: calling it a "resampler" or "engine".
+
+## Model file
+
+The user-supplied weights file an ML estimator loads, `rmvpe.onnx`, looked up in the executable's
+directory and then `KIRAFRQ_ML_DIR`. Its presence is what makes the ML tier available: no file, no
+ML option. _Avoid_: "weights" alone when the on-disk artifact is meant.
 
 ## Spurious voicing
 

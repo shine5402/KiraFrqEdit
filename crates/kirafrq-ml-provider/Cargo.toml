@@ -1,0 +1,22 @@
+[package]
+name = "kirafrq-ml-provider"
+description = "ML f0 estimator provider: the model-free resample/grid layer and the RMVPE path over ONNX Runtime"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# The RMVPE model path (ONNX Runtime session, log-mel frontend, decoder). All
+# `ort` use is confined to the `rmvpe` module; the model-free half compiles
+# and tests with this feature off (#48/#56).
+ort = ["dep:ort", "dep:realfft"]
+
+[dependencies]
+rubato.workspace = true
+ort = { workspace = true, optional = true }
+realfft = { workspace = true, optional = true }
+
+[[example]]
+name = "mel_probe"
+required-features = ["ort"]
