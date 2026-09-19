@@ -264,13 +264,13 @@ impl F0Estimator for WorldEstimator {
         sample_rate: u32,
         track: &F0Track,
     ) -> Result<Option<Vec<f64>>, GeneratorError> {
-        let world_track = kirafrq_world_binding::F0Track {
-            frame_period_ms: track.frame_period_ms,
-            temporal_positions: track.temporal_positions.clone(),
-            f0_hz: track.f0_hz.clone(),
-        };
-        let statistic = kirafrq_world_binding::d4c_aperiodicity0(samples, sample_rate, &world_track)
-            .map_err(|error| GeneratorError::Estimation(error.to_string()))?;
+        let statistic = kirafrq_world_binding::d4c_aperiodicity0(
+            samples,
+            sample_rate,
+            &track.temporal_positions,
+            &track.f0_hz,
+        )
+        .map_err(|error| GeneratorError::Estimation(error.to_string()))?;
         Ok(Some(statistic))
     }
 

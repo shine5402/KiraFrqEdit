@@ -31,19 +31,21 @@ pub(crate) fn apply_energy_gate(samples: &[f64], track: &mut F0Track, ratio: f64
 /// never add voicing.
 pub(crate) fn apply_aperiodicity_gate(track: &mut F0Track, statistic: &[f64], threshold: f64) {
     for (f0_hz, &value) in track.f0_hz.iter_mut().zip(statistic) {
-        if *f0_hz > 0.0 && value < threshold {
+        if is_voiced(*f0_hz) && value < threshold {
             *f0_hz = 0.0;
         }
     }
 }
 
-/// Whether the track still carries a frame the gates could act on: a finite,
-/// positive f0. Silence-only / no-voiced tracks skip the D4C pass (#64).
+/// Whether the track still carries a frame the gates could act on. Silence-only
+/// / no-voiced tracks skip the D4C pass (#64).
 pub(crate) fn has_voiced(track: &F0Track) -> bool {
-    track
-        .f0_hz
-        .iter()
-        .any(|value| value.is_finite() && *value > 0.0)
+    track.f0_hz.iter().any(|value| is_voiced(*value))
+}
+
+/// Whether a frame carries pitch (#8): finite and positive.
+fn is_voiced(f0_hz: f64) -> bool {
+    f0_hz.is_finite() && f0_hz > 0.0
 }
 
 /// The p90 of the voiced frames' amplitudes: `f0 > 0`, with `NaN` excluded
@@ -52,7 +54,7 @@ fn voiced_p90(amplitudes: &[f64], f0_hz: &[f64]) -> Option<f64> {
     let mut voiced: Vec<f64> = f0_hz
         .iter()
         .zip(amplitudes)
-        .filter_map(|(&f0_hz, &amplitude)| (f0_hz.is_finite() && f0_hz > 0.0).then_some(amplitude))
+        .filter_map(|(&f0_hz, &amplitude)| is_voiced(f0_hz).then_some(amplitude))
         .collect();
     if voiced.is_empty() {
         return None;

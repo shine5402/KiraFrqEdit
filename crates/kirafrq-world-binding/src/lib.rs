@@ -120,12 +120,13 @@ pub fn refine_f0_stonemask(
 /// The raw D4C LoveTrain statistic per frame (#64): the ratio D4C compares
 /// against its `threshold` (default 0.85) to label a frame unvoiced. High
 /// values are periodic (voiced-like), low values aperiodic; frames with
-/// `f0 == 0` read `0.0`. One value per track frame, for the tuned Harvest
-/// path's aperiodicity gate.
+/// `f0 == 0` read `0.0`. `temporal_positions` and `f0_hz` are one frame per
+/// entry, for the tuned Harvest path's aperiodicity gate.
 pub fn d4c_aperiodicity0(
     samples: &[f64],
     sample_rate: u32,
-    track: &F0Track,
+    temporal_positions: &[f64],
+    f0_hz: &[f64],
 ) -> Result<Vec<f64>, WorldError> {
     if samples.is_empty() {
         return Err(WorldError::EmptyInput);
@@ -133,10 +134,10 @@ pub fn d4c_aperiodicity0(
     if sample_rate == 0 {
         return Err(WorldError::InvalidSampleRate);
     }
-    if track.f0_hz.is_empty() {
+    if f0_hz.is_empty() || temporal_positions.len() != f0_hz.len() {
         return Err(WorldError::AnalysisFailed);
     }
-    sys::d4c_aperiodicity0(samples, sample_rate, track)
+    sys::d4c_aperiodicity0(samples, sample_rate, temporal_positions, f0_hz)
 }
 
 /// [`refine_f0_stonemask`] with frame progress; `None` means no reporting and

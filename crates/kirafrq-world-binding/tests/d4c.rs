@@ -1,7 +1,9 @@
 //! Contract for `d4c_aperiodicity0`, the raw D4C LoveTrain statistic behind
 //! the tuned Harvest path's aperiodicity gate (#64).
 
-use kirafrq_world_binding::{Estimator, F0Options, F0Track, WorldError, d4c_aperiodicity0, estimate_f0, refine_f0_stonemask};
+use kirafrq_world_binding::{
+    Estimator, F0Options, WorldError, d4c_aperiodicity0, estimate_f0, refine_f0_stonemask,
+};
 
 const SAMPLE_RATE: u32 = 44_100;
 
@@ -34,7 +36,8 @@ fn the_statistic_is_high_where_a_harmonic_tone_is_voiced() {
         estimate_f0(Estimator::Harvest, &samples, SAMPLE_RATE, &F0Options::default()).unwrap();
     refine_f0_stonemask(&samples, SAMPLE_RATE, &mut track).unwrap();
 
-    let statistic = d4c_aperiodicity0(&samples, SAMPLE_RATE, &track).unwrap();
+    let statistic =
+        d4c_aperiodicity0(&samples, SAMPLE_RATE, &track.temporal_positions, &track.f0_hz).unwrap();
     assert_eq!(statistic.len(), track.len(), "one value per track frame");
 
     let mut voiced: Vec<f64> = track
@@ -58,7 +61,8 @@ fn unvoiced_frames_read_zero() {
         estimate_f0(Estimator::Harvest, &samples, SAMPLE_RATE, &F0Options::default()).unwrap();
     assert_eq!(track.voiced().count(), 0, "silence has no voiced frames");
 
-    let statistic = d4c_aperiodicity0(&samples, SAMPLE_RATE, &track).unwrap();
+    let statistic =
+        d4c_aperiodicity0(&samples, SAMPLE_RATE, &track.temporal_positions, &track.f0_hz).unwrap();
     assert!(
         statistic.iter().all(|value| *value == 0.0),
         "frames with f0 == 0 read 0.0"
@@ -67,31 +71,23 @@ fn unvoiced_frames_read_zero() {
 
 #[test]
 fn invalid_inputs_are_rejected() {
-    let options = F0Options::default();
     assert_eq!(
-        d4c_aperiodicity0(&[], SAMPLE_RATE, &F0Track {
-            frame_period_ms: options.frame_period_ms,
-            temporal_positions: Vec::new(),
-            f0_hz: Vec::new(),
-        }),
+        d4c_aperiodicity0(&[], SAMPLE_RATE, &[], &[]),
         Err(WorldError::EmptyInput)
     );
 
     let samples = tone(220.0, 0.1);
     assert_eq!(
-        d4c_aperiodicity0(&samples, 0, &F0Track {
-            frame_period_ms: options.frame_period_ms,
-            temporal_positions: Vec::new(),
-            f0_hz: Vec::new(),
-        }),
+        d4c_aperiodicity0(&samples, 0, &[], &[]),
         Err(WorldError::InvalidSampleRate)
     );
     assert_eq!(
-        d4c_aperiodicity0(&samples, SAMPLE_RATE, &F0Track {
-            frame_period_ms: options.frame_period_ms,
-            temporal_positions: Vec::new(),
-            f0_hz: Vec::new(),
-        }),
+        d4c_aperiodicity0(&samples, SAMPLE_RATE, &[], &[]),
         Err(WorldError::AnalysisFailed)
+    );
+    assert_eq!(
+        d4c_aperiodicity0(&samples, SAMPLE_RATE, &[0.0], &[]),
+        Err(WorldError::AnalysisFailed),
+        "positions and f0 must be the same length"
     );
 }

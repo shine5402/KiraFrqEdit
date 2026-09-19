@@ -4,8 +4,8 @@ Status: research for issue [#50] (2026-09-19). Reads the vendored WORLD v1.0.1 s
 (`third_party/World`, commit `d625e76`), the current shim/wrapper, and upstream WORLD issues.
 Line numbers are for the **vendored** `src/harvest.cpp`, which carries the #34 progress patch
 (`third_party/World/patches/0001-progress.patch`), so they run a few lines ahead of pristine
-upstream. The levers are ranked, not implemented, except lever 2 — the D4C aperiodicity gate —
-which #55 decided to adopt and #64 landed (see that section).
+upstream. The levers below are ranked, not implemented, except lever 2 — the D4C aperiodicity
+gate, adopted on the tuned path.
 
 [#50]: https://github.com/shine5402/KiraFrqEdit/issues/50
 
@@ -25,9 +25,9 @@ which #55 decided to adopt and #64 landed (see that section).
   (`:871`, `:800`) and `FixStep4` fills unvoiced gaps shorter than 9 frames (`:1046`). The last
   two can re-add exactly the frames the confidence gates removed.
 - Cheapest lever: **use DIO** (it voiced fewer frames than Harvest in our corpus test and is
-  already exposed). Best Harvest-specific payoff on principled grounds: a **D4C aperiodicity
-  gate** — the mechanism Harvest was designed to be paired with. Best cost/risk when patching:
-  **expose the duration knobs** through `HarvestOption`.
+  already exposed). Best Harvest-specific payoff on principled grounds: the **D4C aperiodicity
+  gate** — the mechanism Harvest was designed to be paired with, adopted on the tuned path
+  (#55/#64). Best cost/risk when patching: **expose the duration knobs** through `HarvestOption`.
 - No upstream WORLD fix exists: `harvest.cpp` is unchanged since 2021-02-15 (v1.0.1); the
   over-voicing is intentional, not a bug that will be fixed.
 
@@ -151,7 +151,7 @@ unchanged. The gate only ever forces frames unvoiced; a D4C computation failure 
 failure like StoneMask, and a silence-only / no-voiced file is a no-op. The mechanism below is
 the research that led to it.
 
-`d4c.cpp` (compiled since #63) has `D4CLoveTrain`, which computes a per-frame band-energy ratio
+`d4c.cpp`'s `D4CLoveTrain` computes a per-frame band-energy ratio
 `aperiodicity0` (`d4c.cpp:227-285`); `D4C()` skips aperiodicity estimation for frames where
 `f0[i] == 0 || aperiodicity0[i] <= option->threshold` (`d4c.cpp:385-386`), default threshold
 `0.85` (`constantnumbers.h:37`, `d4c.cpp:405-406`). `D4CLoveTrain` was added specifically to
@@ -278,10 +278,6 @@ predict without a corpus run. Keep as a last-mile tuning knob, not a first move.
 - The one measured DIO-vs-Harvest voiced-frame gap (679 vs 719 of 1097) is a **single sample**
   from `world-integration.md`; no corpus-wide distribution exists yet, so lever 1's payoff is
   unquantified.
-- ~~Whether to gate on the raw `D4CLoveTrain` ratio (default split 0.85) or the final
-  `aperiodicity[0]` (author's split 0.5), and where to put the threshold, are unmeasured.~~
-  Resolved by #55: the raw statistic at **0.85** is the knee and D4C's own default, and the gate
-  ships Harvest-only on the tuned path (lever 2).
 - The duration-constant patch changes the contour only in short gaps/runs; its effect on real
   voiced onsets (which is what `Extend`/`FixStep4` were added to protect) is exactly the risk and
   needs a corpus A/B.

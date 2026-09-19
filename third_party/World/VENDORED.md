@@ -44,7 +44,7 @@ the statistic is computed inside `D4C()` and discarded; the returned
 reseeds the D4C RNG and forwards to the existing static — no change to `D4C()`
 or any arithmetic. Built so `kirafrq-world-binding` can expose
 `d4c_aperiodicity0()`, the statistic behind the tuned Harvest path's
-aperiodicity gate (#55 decided, #64 landed).
+aperiodicity gate.
 
 Re-vendor: extract a fresh upstream `src/` tree, then
 `git apply third_party/World/patches/0001-progress.patch` and
