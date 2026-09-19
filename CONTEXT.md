@@ -35,16 +35,16 @@ refinement — the traditional DSP estimators — or an **ML estimator**. _Avoid
 
 ## ML estimator
 
-An f0 estimator backed by a neural model rather than a DSP algorithm; the model file is supplied
-by the user. Its voicing comes from the model's own confidence, not from the energy voicing gate,
-and it has no StoneMask stage. RMVPE is the supported one. _Avoid_: calling it a "resampler" or
-"engine".
+An f0 estimator backed by a neural model rather than a DSP algorithm. Its voicing comes from the
+model's own confidence, not from the energy voicing gate, and it has no StoneMask stage. RMVPE and
+SwiftF0 are the supported ones. _Avoid_: calling it a "resampler" or "engine".
 
 ## Model file
 
-The user-supplied weights file an ML estimator loads, `rmvpe.onnx`, looked up in the executable's
-directory and then `KIRAFRQ_ML_DIR`. Its presence is what makes the ML tier available: no file, no
-ML option, and selecting an ML estimator without one is an error, not a fallback to WORLD.
+The weights file an ML estimator loads. RMVPE's `rmvpe.onnx` is user-supplied, looked up in the
+executable's directory and then `KIRAFRQ_ML_DIR`; its presence is what makes the RMVPE option
+available, and selecting it without one is an error, not a fallback to WORLD. SwiftF0's
+`swiftf0.onnx` uses the same lookup as an override but ships bundled, so no file is needed.
 _Avoid_: "weights" alone when the on-disk artifact is meant.
 
 ## Spurious voicing

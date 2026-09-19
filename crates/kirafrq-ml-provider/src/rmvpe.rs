@@ -1,5 +1,6 @@
 //! RMVPE over ONNX Runtime: the salience decoder, the #53 policy wiring and
-//! the lazily-built session. Every `ort` call in the workspace lives here.
+//! the lazily-built session. Every `ort` call in the workspace lives in the
+//! model modules.
 //!
 //! Contract (verified against `rvc/lib/rmvpe.py`, `pitch-core-onnx::rmvpe`
 //! and the local `rmvpe.onnx` in #36/#38):
@@ -9,14 +10,14 @@
 //! - output: salience `[1, T, 360]`; f0 is the salience-weighted mean over
 //!   `+/-4` bins around the argmax, confidence is the peak salience.
 
-use std::path::PathBuf;
-
 use ort::value::Tensor;
 
 use crate::grid::{NativeContour, RMVPE_CONTRACT, Track, map_to_table_grid};
 use crate::mel::Frontend;
+use crate::model::ModelSource;
 use crate::policy::UvPolicy;
 use crate::resample::resample_to_model_rate;
+use crate::session;
 use crate::{Error, ProgressObserver};
 
 /// Salience bins on RMVPE's 20-cent grid.
@@ -33,7 +34,7 @@ const PROGRESS_TICKS: usize = 4;
 /// lazily-built singleton behind a mutex, so every run in one process reuses
 /// the loaded model.
 pub struct Rmvpe {
-    model_path: PathBuf,
+    source: ModelSource,
     policy: UvPolicy,
     /// `intra_op_num_threads`; `0` leaves ONNX Runtime's default (physical
     /// cores). Clamped against the machine when the session is built.
@@ -41,11 +42,11 @@ pub struct Rmvpe {
 }
 
 impl Rmvpe {
-    /// The estimator for `model_path` with the #53 policy; `jobs` follows the
+    /// The estimator for `source` with the #53 policy; `jobs` follows the
     /// run's single "cores" knob (0 = ONNX Runtime default).
-    pub fn new(model_path: PathBuf, policy: UvPolicy, jobs: usize) -> Self {
+    pub fn new(source: impl Into<ModelSource>, policy: UvPolicy, jobs: usize) -> Self {
         Self {
-            model_path,
+            source: source.into(),
             policy,
             jobs,
         }
@@ -55,7 +56,7 @@ impl Rmvpe {
     /// cannot be loaded then fails at configuration time (#49) instead of on
     /// the first file.
     pub fn ensure_session(&self) -> Result<(), Error> {
-        session::with(&self.model_path, self.jobs, |_| Ok(()))
+        session::with(&self.source, self.jobs, |_| Ok(()))
     }
 
     /// Estimate f0 for mono 44.1 kHz `samples` and map it onto the table grid
@@ -122,13 +123,13 @@ impl Rmvpe {
     /// Run the process session over a padded `[1, 128, T_pad]` log-mel input
     /// and return the first `frames` rows of the `[1, T_pad, 360]` salience.
     fn run_session(&self, mel: &[f32], frames: usize) -> Result<Vec<f32>, Error> {
-        session::with(&self.model_path, self.jobs, |session| {
+        session::with(&self.source, self.jobs, |session| {
             let padded = mel.len() / crate::mel::N_MELS;
             let input = Tensor::from_array((
                 [1_i64, crate::mel::N_MELS as i64, padded as i64],
                 mel.to_vec().into_boxed_slice(),
             ))
-            .map_err(ort_error)?;
+            .map_err(session::ort_error)?;
             let outputs = session
                 .run(ort::inputs![input])
                 .map_err(|error| Error::Ort(format!("RMVPE inference failed: {error}")))?;
@@ -145,89 +146,6 @@ impl Rmvpe {
             Ok(salience[..frames * N_BINS].to_vec())
         })
     }
-}
-
-/// The process-wide session: one ONNX Runtime session, built lazily behind a
-/// mutex and rebuilt only when the model path or thread count changes (#48).
-mod session {
-    use std::path::{Path, PathBuf};
-    use std::sync::{Mutex, MutexGuard};
-
-    use ort::session::Session;
-    use ort::session::builder::GraphOptimizationLevel;
-
-    use super::{intra_op_threads, ort_error};
-    use crate::Error;
-
-    struct Cached {
-        model_path: PathBuf,
-        jobs: usize,
-        session: Session,
-    }
-
-    static SESSION: Mutex<Option<Cached>> = Mutex::new(None);
-
-    /// Run `f` against the session for `(model_path, jobs)`, building or
-    /// rebuilding it first when needed.
-    pub(super) fn with<R>(
-        model_path: &Path,
-        jobs: usize,
-        f: impl FnOnce(&mut Session) -> Result<R, Error>,
-    ) -> Result<R, Error> {
-        let mut guard: MutexGuard<'_, Option<Cached>> = SESSION
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let stale = guard
-            .as_ref()
-            .is_none_or(|cached| cached.model_path != model_path || cached.jobs != jobs);
-        if stale {
-            *guard = Some(build(model_path, jobs)?);
-        }
-        let cached = guard.as_mut().expect("just built");
-        f(&mut cached.session)
-    }
-
-    /// Build the session: static ONNX Runtime, graph optimization at the
-    /// default level, `inter_op = 1`, `jobs` into the intra-op pool.
-    fn build(model_path: &Path, jobs: usize) -> Result<Cached, Error> {
-        let mut builder = Session::builder().map_err(ort_error)?;
-        builder = builder
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(ort_error)?;
-        builder = builder.with_inter_threads(1).map_err(ort_error)?;
-        if jobs > 0 {
-            builder = builder
-                .with_intra_threads(intra_op_threads(jobs))
-                .map_err(ort_error)?;
-        }
-        let session = builder.commit_from_file(model_path).map_err(|error| {
-            Error::Ort(format!("cannot load {}: {error}", model_path.display()))
-        })?;
-        if session.inputs().is_empty() || session.outputs().is_empty() {
-            return Err(Error::Ort(format!(
-                "{} has no input or output tensor",
-                model_path.display()
-            )));
-        }
-        Ok(Cached {
-            model_path: model_path.to_path_buf(),
-            jobs,
-            session,
-        })
-    }
-}
-
-/// `jobs` clamped to something the machine can use: at least one thread, at
-/// most the available parallelism (an ORT default when `jobs` is 0).
-fn intra_op_threads(jobs: usize) -> usize {
-    let available = std::thread::available_parallelism()
-        .map(|cores| cores.get())
-        .unwrap_or(1);
-    jobs.clamp(1, available.max(1))
-}
-
-fn ort_error(error: impl std::fmt::Display) -> Error {
-    Error::Ort(error.to_string())
 }
 
 /// Decode the salience of the first `frames` native frames into f0 with the
@@ -267,16 +185,6 @@ pub fn decode_salience(salience: &[f32], frames: usize, policy: &UvPolicy) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn intra_op_threads_clamp_to_the_machine() {
-        let available = std::thread::available_parallelism()
-            .map(|cores| cores.get())
-            .unwrap_or(1);
-        assert_eq!(intra_op_threads(1), 1);
-        assert_eq!(intra_op_threads(available), available);
-        assert_eq!(intra_op_threads(usize::MAX), available);
-    }
 
     #[test]
     fn the_decoder_reads_the_peak_bin_through_the_policy() {

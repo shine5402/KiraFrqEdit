@@ -1,5 +1,5 @@
 //! ML f0 estimation for KiraFrqGen: the model-free resample/grid layer and
-//! the RMVPE model path over ONNX Runtime.
+//! the RMVPE and SwiftF0 model paths over ONNX Runtime.
 //!
 //! The crate splits in two by the `ort` feature, so the model-free half
 //! compiles and tests in every configuration (#48/#56):
@@ -8,9 +8,10 @@
 //!   ([`resample_to_model_rate`]; #47), the native-contour -> 5.805 ms
 //!   table-grid mapping ([`map_to_table_grid`]; #47), the native-grid
 //!   voiced/unvoiced policy ([`UvPolicy`]; #53) and model-file resolution
-//!   ([`resolve_model`]; #48).
-//! - **RMVPE** (`ort` on): the ONNX Runtime session, log-mel frontend and
-//!   salience decoder, under [`rmvpe`]. Every `ort` call lives there.
+//!   ([`resolve_model`]/[`resolve_file`]; #48/#69).
+//! - **Models** (`ort` on): the ONNX Runtime session, RMVPE's log-mel
+//!   frontend and salience decoder under [`rmvpe`], and SwiftF0's raw-audio
+//!   adapter under [`swiftf0`] (#69). Every `ort` call lives there.
 //!
 //! The pipeline talks to this crate only through `kirafrqgen-core`'s
 //! `F0Estimator` seam; this crate never depends on core.
@@ -25,12 +26,22 @@ pub mod resample;
 pub mod mel;
 #[cfg(feature = "ort")]
 pub mod rmvpe;
+#[cfg(feature = "ort")]
+mod session;
+#[cfg(feature = "ort")]
+pub mod swiftf0;
 
 pub use grid::{
-    ModelContract, NativeContour, RMVPE_CONTRACT, Track, map_to_table_grid, table_frame_count,
+    ModelContract, NativeContour, RMVPE_CONTRACT, SWIFTF0_CONTRACT, Track, map_to_table_grid,
+    table_frame_count,
 };
-pub use model::{MODEL_DIR_ENV, MODEL_FILE_NAME, ModelError, resolve_model};
-pub use policy::{RMVPE_DEFAULT_CONFIDENCE_THRESHOLD, UvPolicy};
+pub use model::{
+    MODEL_DIR_ENV, ModelError, ModelSource, RMVPE_FILE_NAME, SWIFTF0_FILE_NAME, resolve_file,
+    resolve_model,
+};
+pub use policy::{
+    RMVPE_DEFAULT_CONFIDENCE_THRESHOLD, SWIFTF0_DEFAULT_CONFIDENCE_THRESHOLD, UvPolicy,
+};
 pub use resample::resample_to_model_rate;
 
 /// Coarse per-file progress out of an ML estimate (#34/#48): one tick per
@@ -40,7 +51,7 @@ pub trait ProgressObserver: Send + Sync {
     fn report(&self, done: usize, total: usize);
 }
 
-/// Errors from the model-free layer and the RMVPE path.
+/// Errors from the model-free layer and the model paths.
 #[derive(Debug)]
 pub enum Error {
     /// Resampling the pipeline audio to the model rate failed.
@@ -48,7 +59,7 @@ pub enum Error {
     /// The model file could not be resolved; see [`ModelError`].
     Model(ModelError),
     /// ONNX Runtime failed: session create, inference or a model whose I/O
-    /// contract is not the RMVPE one.
+    /// contract is not the expected one.
     #[cfg(feature = "ort")]
     Ort(String),
 }

@@ -134,21 +134,23 @@ impl From<FormatArg> for Target {
     }
 }
 
-/// The `--estimator` value: the WORLD pair always, RMVPE only in an
-/// ML-enabled build (#48: the compat build has no ML option).
+/// The `--estimator` value: the WORLD pair always, RMVPE and SwiftF0 only in
+/// an ML-enabled build (#48/#69: the compat build has no ML option).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EstimatorArg {
     Dio,
     Harvest,
     #[cfg(feature = "ml")]
     Rmvpe,
+    #[cfg(feature = "ml")]
+    SwiftF0,
 }
 
 impl clap::ValueEnum for EstimatorArg {
     fn value_variants<'a>() -> &'a [Self] {
         #[cfg(feature = "ml")]
         {
-            &[Self::Dio, Self::Harvest, Self::Rmvpe]
+            &[Self::Dio, Self::Harvest, Self::Rmvpe, Self::SwiftF0]
         }
         #[cfg(not(feature = "ml"))]
         {
@@ -162,6 +164,8 @@ impl clap::ValueEnum for EstimatorArg {
             EstimatorArg::Harvest => "harvest",
             #[cfg(feature = "ml")]
             EstimatorArg::Rmvpe => "rmvpe",
+            #[cfg(feature = "ml")]
+            EstimatorArg::SwiftF0 => "swiftf0",
         };
         Some(clap::builder::PossibleValue::new(name).help(Estimator::from(*self).description()))
     }
@@ -174,6 +178,8 @@ impl From<EstimatorArg> for Estimator {
             EstimatorArg::Harvest => Estimator::Harvest,
             #[cfg(feature = "ml")]
             EstimatorArg::Rmvpe => Estimator::Rmvpe,
+            #[cfg(feature = "ml")]
+            EstimatorArg::SwiftF0 => Estimator::SwiftF0,
         }
     }
 }
@@ -262,6 +268,11 @@ mod tests {
             parse_ok(&["bank", "--estimator", "rmvpe"]).estimator,
             Some(EstimatorArg::Rmvpe)
         );
+        #[cfg(feature = "ml")]
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "swiftf0"]).estimator,
+            Some(EstimatorArg::SwiftF0)
+        );
         let error = parse(&["bank", "--estimator", "swipe"]).unwrap_err();
         assert_eq!(error.exit_code(), 2);
     }
@@ -271,8 +282,10 @@ mod tests {
         // #48: the compat build has no ML option at all.
         #[cfg(not(feature = "ml"))]
         {
-            let error = parse(&["bank", "--estimator", "rmvpe"]).unwrap_err();
-            assert_eq!(error.exit_code(), 2);
+            for name in ["rmvpe", "swiftf0"] {
+                let error = parse(&["bank", "--estimator", name]).unwrap_err();
+                assert_eq!(error.exit_code(), 2, "{name}");
+            }
         }
         #[cfg(feature = "ml")]
         {
@@ -290,6 +303,11 @@ mod tests {
         assert_eq!(
             parse_ok(&["bank", "--estimator", "rmvpe"]).estimator(),
             Estimator::Rmvpe
+        );
+        #[cfg(feature = "ml")]
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "swiftf0"]).estimator(),
+            Estimator::SwiftF0
         );
         assert_eq!(
             parse_ok(&["bank", "--estimator", "harvest"]).estimator(),

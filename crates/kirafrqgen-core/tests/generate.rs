@@ -1206,6 +1206,102 @@ fn an_unloadable_ml_model_is_an_early_config_error() {
     }
 }
 
+// --- SwiftF0 (#69) ----------------------------------------------------------
+
+#[test]
+fn selecting_swiftf0_resolves_the_bundled_model_or_reports_the_missing_feature() {
+    // #69: in an ML build SwiftF0 always resolves (bundled), so the factory
+    // succeeds with no explicit model; the compat build rejects it.
+    let config = kirafrqgen_core::F0Config {
+        estimator: kirafrqgen_core::Estimator::SwiftF0,
+        ..kirafrqgen_core::F0Config::default()
+    };
+    let built = kirafrqgen_core::build_estimator(&config, 1);
+    if kirafrqgen_core::ML_SUPPORTED {
+        let estimator = built.expect("the bundled model always builds in an ML build");
+        assert!(!estimator.supports_stonemask(), "ML never refines");
+    } else {
+        match built {
+            Err(GeneratorError::Config(message)) => {
+                assert!(message.contains("no ML estimator support"), "{message}");
+            }
+            Err(other) => panic!("expected a config error, got {other}"),
+            Ok(_) => panic!("expected a config error, got an estimator"),
+        }
+    }
+}
+
+#[test]
+fn selecting_swiftf0_with_a_missing_explicit_model_is_an_early_config_error() {
+    let config = kirafrqgen_core::F0Config {
+        estimator: kirafrqgen_core::Estimator::SwiftF0,
+        ml: kirafrqgen_core::MlConfig {
+            model_path: Some(PathBuf::from("definitely-not-a-model.onnx")),
+            confidence_threshold: None,
+        },
+        ..kirafrqgen_core::F0Config::default()
+    };
+    match kirafrqgen_core::build_estimator(&config, 1) {
+        Err(GeneratorError::Config(message)) => {
+            if kirafrqgen_core::ML_SUPPORTED {
+                assert!(message.contains("definitely-not-a-model.onnx"), "{message}");
+            } else {
+                assert!(message.contains("no ML estimator support"), "{message}");
+            }
+        }
+        Err(other) => panic!("expected a config error, got {other}"),
+        Ok(_) => panic!("expected a config error, got an estimator"),
+    }
+}
+
+/// A 44.1 kHz 220 Hz harmonic stack, long enough for a voiced run: #59
+/// measured full voicing for this shape.
+#[cfg(feature = "ml")]
+fn swiftf0_samples(len: usize) -> Vec<i16> {
+    (0..len)
+        .map(|index| {
+            let t = index as f64 / 44_100.0;
+            let value: f64 = (1..=10)
+                .map(|harmonic| {
+                    (std::f64::consts::TAU * 220.0 * harmonic as f64 * t).sin() / harmonic as f64
+                })
+                .sum();
+            (value * 0.1 * 32_767.0) as i16
+        })
+        .collect()
+}
+
+#[cfg(feature = "ml")]
+#[test]
+fn the_bundled_swiftf0_model_writes_a_conforming_table() {
+    // The factory + pipeline path with no model file anywhere: the bundled
+    // model must carry a real harmonic through to a conforming table.
+    let scratch = Scratch::new("swiftf0-bundled");
+    write_wav(&scratch, "A2.wav", mono(), &swiftf0_samples(8192));
+
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.estimator = kirafrqgen_core::Estimator::SwiftF0;
+    let estimator = kirafrqgen_core::build_estimator(&opts.f0, 1).unwrap();
+    assert!(!estimator.supports_stonemask(), "ML never refines");
+    run(&opts, estimator.as_ref());
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz.len(), 8192 / 256 + 1);
+    assert_eq!(*table.f0_hz.last().unwrap(), 0.0, "the trailing rule");
+    let voiced: Vec<f64> = table
+        .f0_hz
+        .iter()
+        .copied()
+        .filter(|&value| value > 0.0)
+        .collect();
+    assert!(!voiced.is_empty(), "{:?}", table.f0_hz);
+    for &value in &voiced {
+        assert!(value.is_finite(), "non-finite: {value}");
+        assert!((71.0..=800.0).contains(&value), "out of range: {value}");
+        assert!((value - 220.0).abs() < 2.0, "not ~220 Hz: {value}");
+    }
+}
+
 // --- energy voicing gate (#54) ----------------------------------------------
 
 /// 1024 samples: loud, i16 33, loud, loud, empty — frq amplitudes

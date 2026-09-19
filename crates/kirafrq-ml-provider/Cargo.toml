@@ -17,6 +17,10 @@ rubato.workspace = true
 ort = { workspace = true, optional = true }
 realfft = { workspace = true, optional = true }
 
+[dev-dependencies]
+# The bundled SwiftF0 model's pinned-commit provenance check (#69).
+sha2 = "0.10"
+
 [[example]]
 name = "mel_probe"
 required-features = ["ort"]
