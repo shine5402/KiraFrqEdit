@@ -4,6 +4,7 @@
 
 #include "progress_hook.h"
 #include "world/dio.h"
+#include "world/d4c.h"
 #include "world/harvest.h"
 #include "world/stonemask.h"
 
@@ -61,4 +62,11 @@ void kfw_stonemask(const double *x, int x_length, int fs,
                    const double *temporal_positions, const double *f0,
                    int f0_length, double *refined_f0) {
   StoneMask(x, x_length, fs, temporal_positions, f0, f0_length, refined_f0);
+}
+
+void kfw_d4c_aperiodicity0(const double *x, int x_length, int fs,
+                           const double *temporal_positions, const double *f0,
+                           int f0_length, double *aperiodicity0) {
+  GetD4CAperiodicity0(x, x_length, fs, temporal_positions, f0, f0_length,
+                      aperiodicity0);
 }

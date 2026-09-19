@@ -117,6 +117,28 @@ pub fn refine_f0_stonemask(
     refine_f0_stonemask_with_observer(samples, sample_rate, track, None)
 }
 
+/// The raw D4C LoveTrain statistic per frame (#55 probe): the ratio D4C
+/// compares against its `threshold` (default 0.85) to label a frame unvoiced.
+/// High values are periodic (voiced-like), low values aperiodic; frames with
+/// `f0 == 0` read `0.0`. One value per track frame, so the caller can sweep a
+/// gate threshold without rerunning the estimator.
+pub fn d4c_aperiodicity0(
+    samples: &[f64],
+    sample_rate: u32,
+    track: &F0Track,
+) -> Result<Vec<f64>, WorldError> {
+    if samples.is_empty() {
+        return Err(WorldError::EmptyInput);
+    }
+    if sample_rate == 0 {
+        return Err(WorldError::InvalidSampleRate);
+    }
+    if track.f0_hz.is_empty() {
+        return Err(WorldError::AnalysisFailed);
+    }
+    sys::d4c_aperiodicity0(samples, sample_rate, track)
+}
+
 /// [`refine_f0_stonemask`] with frame progress; `None` means no reporting and
 /// no added overhead.
 pub fn refine_f0_stonemask_with_observer(

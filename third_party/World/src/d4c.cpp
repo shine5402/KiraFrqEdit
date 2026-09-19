@@ -339,6 +339,15 @@ static void GetAperiodicity(const double *coarse_frequency_axis,
 
 }  // namespace
 
+void GetD4CAperiodicity0(const double *x, int x_length, int fs,
+    const double *temporal_positions, const double *f0, int f0_length,
+    double *aperiodicity0) {
+  RandnState randn_state = {};
+  randn_reseed(&randn_state);
+  D4CLoveTrain(x, fs, x_length, f0, f0_length, temporal_positions,
+      aperiodicity0, &randn_state);
+}
+
 void D4C(const double *x, int x_length, int fs,
     const double *temporal_positions, const double *f0, int f0_length,
     int fft_size, const D4COption *option, double **aperiodicity) {
