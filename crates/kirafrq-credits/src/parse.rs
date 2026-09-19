@@ -5,6 +5,10 @@
 //! drift. The document is ours, so this handles exactly what it contains: ATX
 //! headings, `- ` bullets, `[text](url)` links, inline code, emphasis, and
 //! fenced code blocks (kept verbatim). Anything else passes through.
+//!
+//! Like GitHub, a single newline inside a paragraph is a soft break: the
+//! source's hard-wrapped lines are joined into one logical line and each
+//! surface reflows it to its own width. A blank line ends the paragraph.
 
 /// A run of text with the inline styling that applies to it. Nesting is
 /// flattened, so a link wrapping inline code carries both flags.
@@ -31,7 +35,7 @@ pub enum Line {
     Heading { level: usize, spans: Vec<Span> },
     /// A `- ` / `* ` / `+ ` bullet, with its leading indentation in columns.
     Bullet { indent: usize, spans: Vec<Span> },
-    /// An ordinary paragraph line.
+    /// A paragraph, its soft-wrapped source lines already joined.
     Text { spans: Vec<Span> },
     /// A line inside a fenced code block, kept verbatim.
     Code { text: String },
@@ -42,32 +46,49 @@ pub enum Line {
 pub fn document(markdown: &str) -> Vec<Line> {
     let mut lines = Vec::new();
     let mut in_fence = false;
+    let mut paragraph: Vec<&str> = Vec::new();
     for line in markdown.lines() {
         if is_fence(line) {
+            flush_paragraph(&mut paragraph, &mut lines);
             in_fence = !in_fence;
         } else if in_fence {
             lines.push(Line::Code {
                 text: line.to_owned(),
             });
         } else if let Some((level, text)) = heading(line) {
+            flush_paragraph(&mut paragraph, &mut lines);
             lines.push(Line::Heading {
                 level,
                 spans: inline(text),
             });
         } else if let Some((indent, text)) = bullet(line) {
+            flush_paragraph(&mut paragraph, &mut lines);
             lines.push(Line::Bullet {
                 indent,
                 spans: inline(text),
             });
         } else if line.trim().is_empty() {
+            flush_paragraph(&mut paragraph, &mut lines);
             lines.push(Line::Blank);
         } else {
-            lines.push(Line::Text {
-                spans: inline(line),
-            });
+            paragraph.push(line.trim());
         }
     }
+    flush_paragraph(&mut paragraph, &mut lines);
     lines
+}
+
+/// Join the soft-wrapped source lines of a paragraph into one [`Line::Text`],
+/// exactly as GitHub reflows a paragraph.
+fn flush_paragraph(paragraph: &mut Vec<&str>, lines: &mut Vec<Line>) {
+    if paragraph.is_empty() {
+        return;
+    }
+    let joined = paragraph.join(" ");
+    paragraph.clear();
+    lines.push(Line::Text {
+        spans: inline(&joined),
+    });
 }
 
 /// The text of an ATX heading line, with its level.

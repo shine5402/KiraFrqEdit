@@ -1,103 +1,328 @@
 //! Draw the parsed credits document with egui styling.
 //!
-//! [`kirafrq_credits::document`] turns `CREDITS.md` into styled lines; this
-//! module is the egui adapter that gives those lines their look: headings in a
-//! larger strong font, inline code on a tinted background, links in the
-//! hyperlink colour and actually clickable, and fenced blocks as one monospace
-//! panel.
+//! The full document is thousands of lines, and egui is immediate mode: a tree
+//! of thousands of labels would be laid out again on every single frame, which
+//! makes scrolling burn CPU. Instead the whole document becomes one [`Galley`]
+//! that is laid out once and cached; epaint culls the rows outside the clip
+//! rect when it tessellates, so a frame only pays for what is on screen.
+//!
+//! Links are not widgets in a single galley, so they are hit-tested against the
+//! galley: hovering a link shows the pointing hand and clicking opens the URL.
 
-use eframe::egui::{self, RichText};
+use std::ops::Range;
+use std::sync::Arc;
+
+use eframe::egui::{
+    self, Color32, FontId, Galley, Sense, Stroke, TextFormat, TextStyle,
+    text::{LayoutJob, TextWrapping},
+};
 use kirafrq_credits::{Line, Span};
 
-/// Draw every line, top to bottom, into `ui`.
-pub fn show(ui: &mut egui::Ui, lines: &[Line]) {
-    let mut index = 0;
-    while index < lines.len() {
-        match &lines[index] {
-            Line::Blank => {
-                ui.add_space(6.0);
-                index += 1;
-            }
-            Line::Code { .. } => {
-                let (block, next) = collect_code_block(lines, index);
-                code_block(ui, &block);
-                index = next;
-            }
-            line => {
-                show_line(ui, line);
-                index += 1;
-            }
-        }
-    }
+/// Vertical padding above and below a fenced code block's panel.
+const CODE_PAD: f32 = 4.0;
+
+/// A link's character range in the laid-out text, with where it points.
+struct Link {
+    chars: Range<usize>,
+    url: String,
 }
 
-/// Join the run of [`Line::Code`] starting at `start` into one block, returning
-/// it and the index just past the run.
-fn collect_code_block(lines: &[Line], start: usize) -> (String, usize) {
-    let mut block = String::new();
-    let mut index = start;
-    while let Some(Line::Code { text }) = lines.get(index) {
-        if !block.is_empty() {
-            block.push('\n');
-        }
-        block.push_str(text);
-        index += 1;
-    }
-    (block, index)
+/// The credits document, laid out lazily and cached across frames.
+pub struct CreditsView {
+    lines: Vec<Line>,
+    cache: Option<Cache>,
 }
 
-fn show_line(ui: &mut egui::Ui, line: &Line) {
-    match line {
-        Line::Blank | Line::Code { .. } => {}
-        Line::Heading { level, spans } => {
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                show_spans(ui, spans, Some(heading_size(*level)));
-            });
+struct Cache {
+    /// The wrap width the galley was laid out for.
+    width: f32,
+    /// The width seen on the previous frame: a resize is allowed to settle for
+    /// a frame before the document is re-wrapped, so dragging the window edge
+    /// does not re-lay-out everything on every frame.
+    settled_width: f32,
+    pixels_per_point: f32,
+    dark_mode: bool,
+    galley: Arc<Galley>,
+    links: Vec<Link>,
+    /// The galley rows each fenced code block covers, for painting its panel.
+    code_rows: Vec<Range<usize>>,
+    code_bg: Color32,
+}
+
+impl CreditsView {
+    /// Parse `markdown` for later drawing.
+    pub fn new(markdown: &str) -> Self {
+        Self {
+            lines: kirafrq_credits::document(markdown),
+            cache: None,
         }
-        Line::Bullet { indent, spans } => {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                if *indent > 0 {
-                    ui.add_space(*indent as f32 * 6.0);
+    }
+
+    /// Draw the document in a vertical scroll area.
+    pub fn ui(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| self.show(ui));
+    }
+
+    fn show(&mut self, ui: &mut egui::Ui) {
+        self.ensure_cache(ui);
+        let Some(cache) = &self.cache else {
+            return;
+        };
+        let galley = Arc::clone(&cache.galley);
+
+        let (rect, response) = ui.allocate_exact_size(galley.size(), Sense::click_and_drag());
+
+        if ui.is_rect_visible(rect) {
+            for rows in &cache.code_rows {
+                if rows.is_empty() {
+                    continue;
                 }
-                ui.label("- ");
-                show_spans(ui, spans, None);
-            });
+                let top = rect.top() + galley.rows[rows.start].rect().top() - CODE_PAD;
+                let bottom = rect.top() + galley.rows[rows.end - 1].rect().bottom() + CODE_PAD;
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(rect.left(), top),
+                        egui::pos2(rect.right(), bottom),
+                    ),
+                    4.0,
+                    cache.code_bg,
+                );
+            }
+            egui::text_selection::LabelSelectionState::label_text_selection(
+                ui,
+                &response,
+                rect.left_top(),
+                Arc::clone(&galley),
+                ui.visuals().text_color(),
+                Stroke::NONE,
+            );
         }
-        Line::Text { spans } => {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                show_spans(ui, spans, None);
-            });
+
+        if let Some(pointer) = response.hover_pos() {
+            let cursor = galley.cursor_from_pos(pointer - rect.left_top());
+            let index = cursor.index.0;
+            if let Some(link) = cache.links.iter().find(|link| link.chars.contains(&index)) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                if response.clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(&link.url));
+                }
+            }
         }
+    }
+
+    /// Lay the document out if the cache is missing, stale, or the window is
+    /// no longer the width it was measured at.
+    fn ensure_cache(&mut self, ui: &mut egui::Ui) {
+        let width = ui.available_width();
+        let pixels_per_point = ui.ctx().pixels_per_point();
+        let dark_mode = ui.visuals().dark_mode;
+        let same_theme = |cache: &Cache| {
+            cache.pixels_per_point == pixels_per_point && cache.dark_mode == dark_mode
+        };
+        let current = |cache: &Cache| (cache.width - width).abs() < 0.5;
+
+        if self
+            .cache
+            .as_ref()
+            .is_some_and(|c| same_theme(c) && current(c))
+        {
+            return;
+        }
+
+        // Re-wrap only once a resize settles, so dragging the window edge does
+        // not re-lay-out the whole document on every frame of the drag.
+        if let Some(cache) = self.cache.as_mut()
+            && same_theme(cache)
+            && (cache.settled_width - width).abs() >= 0.5
+        {
+            cache.settled_width = width;
+            ui.ctx().request_repaint();
+            return;
+        }
+
+        self.rebuild(ui, width, pixels_per_point, dark_mode);
+    }
+
+    fn rebuild(&mut self, ui: &egui::Ui, width: f32, pixels_per_point: f32, dark_mode: bool) {
+        let (job, links, code_blocks) = document_job(ui.style(), &self.lines, width);
+        let galley = ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
+        let code_rows = code_row_ranges(&galley, &code_blocks)
+            .into_iter()
+            .filter(|rows| !rows.is_empty())
+            .collect();
+        self.cache = Some(Cache {
+            width,
+            settled_width: width,
+            pixels_per_point,
+            dark_mode,
+            galley,
+            links,
+            code_rows,
+            code_bg: ui.visuals().code_bg_color,
+        });
     }
 }
 
-/// Draw the inline spans of one line. Zero item spacing keeps the words of a
-/// line glued together; the wrapping happens inside the labels.
-fn show_spans(ui: &mut egui::Ui, spans: &[Span], size: Option<f32>) {
-    for span in spans {
-        let mut text = RichText::new(&span.text);
-        if let Some(size) = size {
-            text = text.size(size).strong();
+/// Build one [`LayoutJob`] for the whole document, recording where its links
+/// and fenced code blocks sit. Both are character ranges into the job text.
+fn document_job(
+    style: &egui::Style,
+    lines: &[Line],
+    width: f32,
+) -> (LayoutJob, Vec<Link>, Vec<Range<usize>>) {
+    let body = TextStyle::Body.resolve(style);
+    let mono = TextStyle::Monospace.resolve(style);
+    let text_color = style.visuals.text_color();
+    let strong_color = style.visuals.strong_text_color();
+    let link_color = style.visuals.hyperlink_color;
+    let code_bg = style.visuals.code_bg_color;
+
+    let mut builder = JobBuilder {
+        job: LayoutJob {
+            wrap: TextWrapping {
+                max_width: width,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        chars: 0,
+        links: Vec::new(),
+        code_blocks: Vec::new(),
+        code_start: None,
+        mono: mono.clone(),
+        text: text_color,
+        strong: strong_color,
+        link: link_color,
+        code_bg,
+    };
+
+    for line in lines {
+        if !matches!(line, Line::Code { .. })
+            && let Some(start) = builder.code_start.take()
+        {
+            builder.code_blocks.push(start..builder.chars);
+        }
+        match line {
+            Line::Blank => {}
+            Line::Heading { level, spans } => {
+                let base = TextFormat {
+                    font_id: FontId::new(heading_size(*level), body.family.clone()),
+                    color: strong_color,
+                    ..Default::default()
+                };
+                for span in spans {
+                    builder.push_span(span, &base);
+                }
+            }
+            Line::Bullet { indent, spans } => {
+                let base = builder.plain(body.clone());
+                builder.push("- ", *indent as f32 * 6.0, base.clone());
+                for span in spans {
+                    builder.push_span(span, &base);
+                }
+            }
+            Line::Text { spans } => {
+                let base = builder.plain(body.clone());
+                for span in spans {
+                    builder.push_span(span, &base);
+                }
+            }
+            Line::Code { text } => {
+                builder.code_start.get_or_insert(builder.chars);
+                builder.push(text, 0.0, builder.plain(mono.clone()));
+            }
+        }
+        builder.push("\n", 0.0, builder.plain(body.clone()));
+    }
+    if let Some(start) = builder.code_start.take() {
+        builder.code_blocks.push(start..builder.chars);
+    }
+    (builder.job, builder.links, builder.code_blocks)
+}
+
+/// One [`LayoutJob`] under construction, tracking what sits where.
+struct JobBuilder {
+    job: LayoutJob,
+    /// Characters appended so far.
+    chars: usize,
+    links: Vec<Link>,
+    code_blocks: Vec<Range<usize>>,
+    code_start: Option<usize>,
+    mono: FontId,
+    text: Color32,
+    strong: Color32,
+    link: Color32,
+    code_bg: Color32,
+}
+
+impl JobBuilder {
+    fn plain(&self, font: FontId) -> TextFormat {
+        TextFormat {
+            font_id: font,
+            color: self.text,
+            ..Default::default()
+        }
+    }
+
+    fn push(&mut self, text: &str, leading_space: f32, format: TextFormat) {
+        self.job.append(text, leading_space, format);
+        self.chars += text.chars().count();
+    }
+
+    /// Push one inline span, applying its code/emphasis/link styling and
+    /// remembering a link's range.
+    fn push_span(&mut self, span: &Span, base: &TextFormat) {
+        let mut format = base.clone();
+        if span.code {
+            format.font_id = self.mono.clone();
+            format.background = self.code_bg;
         }
         if span.bold {
-            text = text.strong();
+            format.color = self.strong;
         }
         if span.italic {
-            text = text.italics();
+            format.italics = true;
         }
-        if span.code {
-            text = text.code();
-        }
+        let start = self.chars;
         if let Some(url) = &span.link {
-            ui.hyperlink_to(text, url);
+            format.color = self.link;
+            format.underline = Stroke::new(1.0, self.link);
+            self.push(&span.text, 0.0, format);
+            self.links.push(Link {
+                chars: start..self.chars,
+                url: url.clone(),
+            });
         } else {
-            ui.label(text);
+            self.push(&span.text, 0.0, format);
         }
     }
+}
+
+/// Map each code block's character range to the galley rows it covers.
+fn code_row_ranges(galley: &Galley, code_blocks: &[Range<usize>]) -> Vec<Range<usize>> {
+    if code_blocks.is_empty() {
+        return Vec::new();
+    }
+    let mut row_starts = Vec::with_capacity(galley.rows.len());
+    let mut chars = 0usize;
+    for row in &galley.rows {
+        row_starts.push(chars);
+        chars += row.char_count_including_newline().0;
+    }
+    code_blocks
+        .iter()
+        .map(|block| {
+            let first = row_starts
+                .partition_point(|start| *start <= block.start)
+                .saturating_sub(1);
+            let last = row_starts
+                .partition_point(|start| *start < block.end)
+                .saturating_sub(1);
+            first..last + 1
+        })
+        .collect()
 }
 
 fn heading_size(level: usize) -> f32 {
@@ -105,49 +330,5 @@ fn heading_size(level: usize) -> f32 {
         1 => 20.0,
         2 => 16.0,
         _ => 14.0,
-    }
-}
-
-/// One fenced block, drawn as a single monospace panel so it reads as code
-/// rather than as one tinted line per row.
-fn code_block(ui: &mut egui::Ui, block: &str) {
-    egui::Frame::default()
-        .fill(ui.visuals().code_bg_color)
-        .inner_margin(6.0)
-        .show(ui, |ui| {
-            ui.add(egui::Label::new(RichText::new(block).monospace()).wrap());
-        });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_code_run_joins_into_one_block() {
-        let lines = vec![
-            Line::Text { spans: vec![] },
-            Line::Code { text: "a".into() },
-            Line::Code { text: "b".into() },
-            Line::Blank,
-        ];
-        let (block, next) = collect_code_block(&lines, 1);
-        assert_eq!(block, "a\nb");
-        assert_eq!(next, 3);
-    }
-
-    #[test]
-    fn a_single_code_line_still_collects_cleanly() {
-        let lines = vec![Line::Code {
-            text: "only".into(),
-        }];
-        assert_eq!(collect_code_block(&lines, 0), ("only".to_owned(), 1));
-    }
-
-    #[test]
-    fn headings_shrink_with_depth() {
-        assert!(heading_size(1) > heading_size(2));
-        assert!(heading_size(2) > heading_size(3));
-        assert_eq!(heading_size(3), heading_size(6));
     }
 }

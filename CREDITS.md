@@ -1,8 +1,7 @@
 # Credits and third-party notices
 
-KiraFrqGen stands on other people's work. This file is the source for the credits the binaries
-show: `kirafrqgen-cli --license` prints the index below (`--license-full` adds the license
-texts), and the GUI's Help > Credits window shows all of it.
+KiraFrqGen stands on other people's work. Our heartfelt thanks to every project below — without
+them, this project would not exist.
 
 ## Project credits
 

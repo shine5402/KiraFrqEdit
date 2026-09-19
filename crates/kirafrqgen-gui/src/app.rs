@@ -195,11 +195,9 @@ pub struct KiraFrqGenApp {
     /// (#32); an unavailable clipboard disables its Paste item.
     clipboard: PathClipboard,
 
-    /// The Help > Credits window: whether it is open, whether it shows the
-    /// full license texts (the default), and the parsed lines it displays.
+    /// The Help > Credits window: whether it is open, and its laid-out view.
     credits_open: bool,
-    credits_full: bool,
-    credits_lines: Vec<kirafrq_credits::Line>,
+    credits: Option<crate::credits::CreditsView>,
 
     run: Option<RunSession>,
 }
@@ -233,8 +231,7 @@ impl KiraFrqGenApp {
             selected: BTreeSet::new(),
             clipboard: PathClipboard::default(),
             credits_open: false,
-            credits_full: true,
-            credits_lines: Vec::new(),
+            credits: None,
             run: None,
         }
     }
@@ -345,14 +342,8 @@ impl KiraFrqGenApp {
         }
     }
 
-    /// Re-parse the credits for the current full/compact choice, so the window
-    /// pays the markdown parse once instead of every frame.
-    fn refresh_credits(&mut self) {
-        self.credits_lines =
-            kirafrq_credits::document(kirafrq_credits::for_display(self.credits_full));
-    }
-
-    /// The Help > Credits window.
+    /// The Help > Credits window. Always the full document: it virtualizes, so
+    /// the size costs nothing to scroll, and whoever opens it wants the texts.
     fn credits_window(&mut self, ctx: &egui::Context) {
         if !self.credits_open {
             return;
@@ -363,17 +354,9 @@ impl KiraFrqGenApp {
             .default_size([640.0, 480.0])
             .resizable(true)
             .show(ctx, |ui| {
-                if ui
-                    .checkbox(&mut self.credits_full, "Show full license texts")
-                    .changed()
-                {
-                    self.refresh_credits();
+                if let Some(credits) = &mut self.credits {
+                    credits.ui(ui);
                 }
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        crate::credits::show(ui, &self.credits_lines);
-                    });
             });
         self.credits_open = open;
     }
@@ -443,7 +426,9 @@ impl KiraFrqGenApp {
         });
         if open_credits {
             self.credits_open = true;
-            self.refresh_credits();
+            self.credits.get_or_insert_with(|| {
+                crate::credits::CreditsView::new(kirafrq_credits::for_display(true))
+            });
         }
         ui.weak("Bulk-generate frq tables for your UTAU voicebank.");
         ui.add_space(10.0);

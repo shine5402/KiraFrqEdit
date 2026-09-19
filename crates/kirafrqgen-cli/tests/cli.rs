@@ -615,7 +615,7 @@ fn license_prints_rendered_credits_to_stdout() {
         run.stderr
     );
     assert!(
-        run.stdout.contains("kirafrqgen-cli --license"),
+        run.stdout.contains("Credits and third-party notices"),
         "{}",
         run.stdout
     );
