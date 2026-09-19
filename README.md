@@ -16,9 +16,10 @@ the `Cargo.toml` files.
 
 ## ML model
 
-The RMVPE weights are not redistributed with this project. You can get `rmvpe.onnx` here:
-[lj1995/VoiceConversionWebUI/rmvpe.onnx](https://huggingface.co/lj1995/VoiceConversionWebUI/blob/main/rmvpe.onnx).
-Put the file next to the executable (or in the directory named by `KIRAFRQ_ML_DIR`).
+The RMVPE weights are not redistributed with this project. You can get a usable `rmvpe.onnx`
+here:
+[lj1995/VoiceConversionWebUI/rmvpe.onnx](https://huggingface.co/lj1995/VoiceConversionWebUI/blob/main/rmvpe.onnx)
+(361 MB). Put the file next to the executable (or in the directory named by `KIRAFRQ_ML_DIR`).
 
 ## License
 
