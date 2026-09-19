@@ -22,6 +22,17 @@ use crate::run::{Row, RunState, Status};
 use crate::text_ops::{self, CharRange};
 use crate::tree::{DirNode, Targets, Tree, WavEntry, missing_label, target_name};
 
+/// Where the model-missing hint sends the user (#72): the README's `ML model`
+/// section, which documents `rmvpe.onnx` and its lookup directories.
+const MODEL_HELP_URL: &str =
+    "https://github.com/shine5402/KiraFrqEdit/blob/main/README.md#ml-model";
+
+/// Whether the selected estimator can run right now (#72): RMVPE needs a
+/// resolved model file, the WORLD pair never does.
+fn estimator_runnable(estimator: Estimator, ml_available: bool) -> bool {
+    estimator != Estimator::Rmvpe || ml_available
+}
+
 /// Lock the run state, recovering a poisoned mutex: a panicked worker must not
 /// take the window down with it.
 fn lock(state: &Mutex<RunState>) -> MutexGuard<'_, RunState> {
@@ -393,24 +404,24 @@ impl KiraFrqGenApp {
             ui.horizontal(|ui| {
                 ui.radio_value(&mut self.estimator, Estimator::Harvest, "Harvest");
                 ui.radio_value(&mut self.estimator, Estimator::Dio, "DIO");
-                // #48: the compat build has no ML option at all.
+                // #48: the compat build has no ML option at all. #72: a
+                // missing model must not disable the row; the red hint below
+                // and the disabled Generate carry the unavailability instead.
                 if cfg!(feature = "ml") {
-                    let rmvpe = ui.add_enabled(
-                        self.ml_available,
-                        egui::RadioButton::new(self.estimator == Estimator::Rmvpe, "RMVPE"),
-                    );
-                    if rmvpe.clicked() {
-                        self.estimator = Estimator::Rmvpe;
-                    }
-                    if !self.ml_available {
-                        rmvpe.on_hover_text(
-                            "RMVPE needs a model file. Put `rmvpe.onnx` next to the executable \
-                             or in the directory named by KIRAFRQ_ML_DIR, then restart.",
-                        );
-                    }
+                    ui.radio_value(&mut self.estimator, Estimator::Rmvpe, "RMVPE");
                 }
             });
             ui.label(RichText::new(self.estimator.description()).weak());
+            if !estimator_runnable(self.estimator, self.ml_available) {
+                ui.horizontal_wrapped(|ui| {
+                    let red = ui.visuals().error_fg_color;
+                    ui.colored_label(red, "The model required for this estimator is not found.");
+                    ui.hyperlink_to(
+                        RichText::new("Click here to see how to obtain it.").color(red),
+                        MODEL_HELP_URL,
+                    );
+                });
+            }
 
             ui.add_space(8.0);
             let quirks = ui.add_enabled(
@@ -476,7 +487,8 @@ impl KiraFrqGenApp {
             let enabled = !self.is_running()
                 && !self.selected.is_empty()
                 && self.targets.any()
-                && self.tree.is_some();
+                && self.tree.is_some()
+                && estimator_runnable(self.estimator, self.ml_available);
             if running {
                 let cancelling = self
                     .run_state()
@@ -1305,6 +1317,20 @@ mod tests {
     fn the_default_estimator_follows_the_ml_capability() {
         assert_eq!(kirafrqgen_core::default_estimator(true), Estimator::Rmvpe);
         assert_eq!(kirafrqgen_core::default_estimator(false), Estimator::Dio);
+    }
+
+    #[test]
+    fn an_unavailable_estimator_cannot_run() {
+        assert!(estimator_runnable(Estimator::Rmvpe, true));
+        assert!(!estimator_runnable(Estimator::Rmvpe, false));
+        // The WORLD pair never needs a model (#72).
+        assert!(estimator_runnable(Estimator::Dio, false));
+        assert!(estimator_runnable(Estimator::Harvest, false));
+    }
+
+    #[test]
+    fn the_model_hint_links_to_the_readme_model_section() {
+        assert!(MODEL_HELP_URL.contains("README.md#ml-model"));
     }
 
     #[test]

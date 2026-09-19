@@ -48,7 +48,8 @@ impl Estimator {
     }
 
     /// The user-facing one-liner the front ends show for this estimator
-    /// (wording fixed in #49).
+    /// (wording fixed in #49; the RMVPE model caveat moved to the GUI's
+    /// model-missing hint in #72).
     pub fn description(self) -> &'static str {
         match self {
             Estimator::Dio => {
@@ -56,9 +57,7 @@ impl Estimator {
                  A traditional DSP-based algorithm from WORLD."
             }
             Estimator::Harvest => "Robust, but slow. A traditional DSP-based algorithm from WORLD.",
-            Estimator::Rmvpe => {
-                "Fast and reliable ML based estimator. Requires model to be present."
-            }
+            Estimator::Rmvpe => "Fast and reliable ML based estimator.",
         }
     }
 }
@@ -563,5 +562,16 @@ impl std::error::Error for GeneratorError {
             GeneratorError::Scan { error, .. } => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Estimator;
+
+    /// #72: the GUI's model-missing hint replaces the old description caveat.
+    #[test]
+    fn the_rmvpe_description_does_not_mention_a_required_model() {
+        assert!(!Estimator::Rmvpe.description().contains("Requires model"));
     }
 }
