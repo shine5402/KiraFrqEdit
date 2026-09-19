@@ -1424,10 +1424,7 @@ fn the_aperiodicity_gate_is_harvest_only() {
 
     let mut opts = options(&scratch.0, &[Target::Frq]);
     opts.f0.estimator = kirafrqgen_core::Estimator::Dio;
-    assert!(
-        opts.f0.world_quirks,
-        "the tuned path is on; DIO is excluded"
-    );
+    assert!(opts.f0.world_quirks, "the tuned path is on; DIO is excluded");
     run(&opts, &estimator);
 
     let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
