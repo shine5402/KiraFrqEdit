@@ -138,6 +138,12 @@ struct FakeEstimator {
     cancel_on_call: Option<(usize, CancelToken)>,
     /// Whether this estimator advertises StoneMask support (#48).
     stone_mask: bool,
+    /// Scripted raw D4C statistic per frame (#64); `None` = no statistic.
+    aperiodicity0: Option<Vec<f64>>,
+    /// Whether the statistic call fails (#64 per-file failure path).
+    aperiodicity_error: bool,
+    /// How many times the pipeline asked for the statistic (#64 wiring).
+    aperiodicity_calls: AtomicUsize,
 }
 
 impl FakeEstimator {
@@ -149,6 +155,9 @@ impl FakeEstimator {
             refine_factor: 1.0,
             cancel_on_call: None,
             stone_mask: true,
+            aperiodicity0: None,
+            aperiodicity_error: false,
+            aperiodicity_calls: AtomicUsize::new(0),
         }
     }
 
@@ -158,6 +167,10 @@ impl FakeEstimator {
 
     fn refined_count(&self) -> usize {
         self.refined.load(Ordering::SeqCst)
+    }
+
+    fn aperiodicity_calls(&self) -> usize {
+        self.aperiodicity_calls.load(Ordering::SeqCst)
     }
 }
 
@@ -210,6 +223,23 @@ impl F0Estimator for FakeEstimator {
 
     fn supports_stonemask(&self) -> bool {
         self.stone_mask
+    }
+
+    fn aperiodicity0(
+        &self,
+        _samples: &[f64],
+        _sample_rate: u32,
+        track: &F0Track,
+    ) -> Result<Option<Vec<f64>>, GeneratorError> {
+        self.aperiodicity_calls.fetch_add(1, Ordering::SeqCst);
+        if self.aperiodicity_error {
+            return Err(GeneratorError::Estimation("D4C failed".to_string()));
+        }
+        Ok(self.aperiodicity0.as_ref().map(|values| {
+            (0..track.f0_hz.len())
+                .map(|index| values[index % values.len()])
+                .collect()
+        }))
     }
 }
 
@@ -1264,6 +1294,134 @@ fn the_energy_gate_is_a_no_op_without_voiced_frames() {
     let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
     assert_eq!(table.f0_hz, [0.0; 3]);
     assert_eq!(table.key_hz, 0.0);
+}
+
+// --- aperiodicity voicing gate (#64) ----------------------------------------
+
+#[test]
+fn the_aperiodicity_gate_forces_low_statistic_frames_unvoiced() {
+    let scratch = Scratch::new("aperiodicity-gate");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1024]);
+    let mut estimator = FakeEstimator::new(&[110.0, 220.0, 330.0, 440.0, 550.0]);
+    // 0.84 and 0.50 are below the 0.85 split; 0.90 is above it.
+    estimator.aperiodicity0 = Some(vec![0.99, 0.84, 0.90, 0.50, 0.99]);
+
+    let opts = options(&scratch.0, &[Target::Frq]);
+    assert_eq!(
+        opts.f0.estimator,
+        kirafrqgen_core::Estimator::Harvest,
+        "the default estimator is the Harvest path"
+    );
+    run(&opts, &estimator);
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz, [110.0, 0.0, 330.0, 0.0, 0.0]);
+    assert_eq!(table.key_hz, 220.0, "key over the gated voiced frames");
+    assert_eq!(estimator.aperiodicity_calls(), 1);
+}
+
+#[test]
+fn the_aperiodicity_gate_is_harvest_only() {
+    let scratch = Scratch::new("aperiodicity-gate-dio");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1024]);
+    let mut estimator = FakeEstimator::new(&[110.0, 220.0, 330.0, 440.0, 550.0]);
+    // A statistic that would gate every frame: "untouched" is unambiguous.
+    estimator.aperiodicity0 = Some(vec![0.0; 5]);
+
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.estimator = kirafrqgen_core::Estimator::Dio;
+    assert!(opts.f0.world_quirks, "the tuned path is on; DIO is excluded");
+    run(&opts, &estimator);
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(
+        table.f0_hz,
+        [110.0, 220.0, 330.0, 440.0, 0.0],
+        "no aperiodicity gate on DIO"
+    );
+    assert_eq!(estimator.aperiodicity_calls(), 0, "DIO never asks for D4C");
+}
+
+#[test]
+fn world_quirks_off_skips_the_aperiodicity_gate() {
+    let scratch = Scratch::new("aperiodicity-gate-off");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1024]);
+    let mut estimator = FakeEstimator::new(&[110.0, 220.0, 330.0, 440.0, 550.0]);
+    estimator.aperiodicity0 = Some(vec![0.0; 5]);
+
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.world_quirks = false;
+    run(&opts, &estimator);
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz, [110.0, 220.0, 330.0, 440.0, 0.0]);
+    assert_eq!(estimator.aperiodicity_calls(), 0);
+}
+
+#[test]
+fn the_aperiodicity_gate_never_adds_voicing() {
+    let scratch = Scratch::new("aperiodicity-gate-no-add");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1024]);
+    let mut estimator = FakeEstimator::new(&[110.0, 0.0, 330.0, 0.0, 550.0]);
+    // High statistics everywhere: the gate never voices an unvoiced frame.
+    estimator.aperiodicity0 = Some(vec![1.0; 5]);
+
+    run(&options(&scratch.0, &[Target::Frq]), &estimator);
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz, [110.0, 0.0, 330.0, 0.0, 0.0]);
+}
+
+#[test]
+fn the_aperiodicity_gate_is_a_no_op_without_voiced_frames() {
+    let scratch = Scratch::new("aperiodicity-gate-unvoiced");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1024]);
+    let mut estimator = FakeEstimator::new(&[0.0]);
+    estimator.aperiodicity0 = Some(vec![0.0]);
+
+    run(&options(&scratch.0, &[Target::Frq]), &estimator);
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz, [0.0; 5]);
+    assert_eq!(
+        estimator.aperiodicity_calls(),
+        0,
+        "a silence-only / no-voiced file skips the D4C pass"
+    );
+}
+
+#[test]
+fn a_d4c_failure_is_a_per_file_failure() {
+    let scratch = Scratch::new("aperiodicity-gate-failure");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1024]);
+    let mut estimator = FakeEstimator::new(&[220.0]);
+    estimator.aperiodicity_error = true;
+
+    let summary = run(&options(&scratch.0, &[Target::Frq]), &estimator);
+
+    assert_eq!(summary.written, 0);
+    assert_eq!(summary.failed.len(), 1, "{:?}", summary.failed);
+    assert!(summary.failed[0].1.contains("D4C"), "{:?}", summary.failed);
+    assert!(!scratch.join("A2_wav.frq").exists());
+}
+
+#[test]
+fn an_invalid_aperiodicity_gate_threshold_is_a_config_error() {
+    let scratch = Scratch::new("aperiodicity-threshold");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 512]);
+    let estimator = FakeEstimator::new(&[220.0]);
+
+    for threshold in [f64::NAN, -0.01] {
+        let mut opts = options(&scratch.0, &[Target::Frq]);
+        opts.f0.aperiodicity_gate_threshold = threshold;
+        assert!(
+            matches!(
+                run_result(&opts, &estimator),
+                Err(GeneratorError::Config(_))
+            ),
+            "threshold {threshold} must be rejected"
+        );
+    }
 }
 
 // --- progress ---------------------------------------------------------------

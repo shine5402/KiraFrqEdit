@@ -271,11 +271,30 @@ fn process_wav(
         return WavResult { report, mrq: None };
     }
 
-    // The tuned WORLD path's post-pass (#54): applied to both WORLD
-    // estimators. The ML estimator is excluded (#53): its confidence gate is
-    // its voicing policy, and the WORLD energy gate is a WORLD workaround.
+    // The tuned WORLD path's post-passes (#54/#64): the energy gate applies to
+    // both WORLD estimators, the aperiodicity gate to Harvest only. The ML
+    // estimator is excluded (#53): its confidence gate is its voicing policy,
+    // and the WORLD gates are a WORLD workaround.
     if opts.f0.world_quirks && is_world(opts.f0.estimator) {
         voicing::apply_energy_gate(&decoded.samples, &mut track, opts.f0.energy_gate_ratio);
+
+        // A no-voiced (silence-only) track is a no-op and skips the D4C pass
+        // entirely (#64).
+        if opts.f0.estimator == Estimator::Harvest && voicing::has_voiced(&track) {
+            match estimator.aperiodicity0(&decoded.samples, SAMPLE_RATE, &track) {
+                Ok(Some(statistic)) => voicing::apply_aperiodicity_gate(
+                    &mut track,
+                    &statistic,
+                    opts.f0.aperiodicity_gate_threshold,
+                ),
+                Ok(None) => {}
+                Err(error) => {
+                    report.failures.push(format!("D4C: {error}"));
+                    progress.file_finished(&report);
+                    return WavResult { report, mrq: None };
+                }
+            }
+        }
     }
 
     let table = build_table(
@@ -617,6 +636,11 @@ fn validate(opts: &GenerateOptions) -> Result<(), GeneratorError> {
     if !f0.energy_gate_ratio.is_finite() || f0.energy_gate_ratio < 0.0 {
         return Err(GeneratorError::Config(
             "the energy gate ratio must be finite and non-negative".to_string(),
+        ));
+    }
+    if !f0.aperiodicity_gate_threshold.is_finite() || f0.aperiodicity_gate_threshold < 0.0 {
+        return Err(GeneratorError::Config(
+            "the aperiodicity gate threshold must be finite and non-negative".to_string(),
         ));
     }
     Ok(())

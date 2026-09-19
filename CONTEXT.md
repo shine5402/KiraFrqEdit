@@ -61,6 +61,15 @@ computed amplitude, not one read from an existing frq). It targets the quiet noi
 breath and onsets at speech level pass through. _Avoid_: bare "gate" — an aperiodicity gate is a
 different stage.
 
+## Aperiodicity gate
+
+The second workaround the tuned WORLD path applies to spurious voicing, on Harvest only and on top
+of the energy voicing gate: a frame is kept voiced only when its raw D4C LoveTrain aperiodicity
+statistic clears 0.85. It targets the louder aperiodic residuals — onsets, transitions and voiced
+consonants — that the energy gate's loudness test lets through. Both thresholds are internal, with
+no user knob. _Avoid_: "D4C gate" or bare "gate" alone; the full term disambiguates it from the
+energy voicing gate.
+
 ## Resampler
 
 A UTAU synthesis engine (moresampler, TIPS, fresamp, resampler, ...). "Engine" alone is ambiguous

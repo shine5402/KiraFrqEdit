@@ -117,11 +117,11 @@ pub fn refine_f0_stonemask(
     refine_f0_stonemask_with_observer(samples, sample_rate, track, None)
 }
 
-/// The raw D4C LoveTrain statistic per frame (#55 probe): the ratio D4C
-/// compares against its `threshold` (default 0.85) to label a frame unvoiced.
-/// High values are periodic (voiced-like), low values aperiodic; frames with
-/// `f0 == 0` read `0.0`. One value per track frame, so the caller can sweep a
-/// gate threshold without rerunning the estimator.
+/// The raw D4C LoveTrain statistic per frame (#64): the ratio D4C compares
+/// against its `threshold` (default 0.85) to label a frame unvoiced. High
+/// values are periodic (voiced-like), low values aperiodic; frames with
+/// `f0 == 0` read `0.0`. One value per track frame, for the tuned Harvest
+/// path's aperiodicity gate.
 pub fn d4c_aperiodicity0(
     samples: &[f64],
     sample_rate: u32,
