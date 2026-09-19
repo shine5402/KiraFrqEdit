@@ -196,10 +196,10 @@ pub struct KiraFrqGenApp {
     clipboard: PathClipboard,
 
     /// The Help > Credits window: whether it is open, whether it shows the
-    /// full license texts (the default), and the rendered text it displays.
+    /// full license texts (the default), and the parsed lines it displays.
     credits_open: bool,
     credits_full: bool,
-    credits_text: String,
+    credits_lines: Vec<kirafrq_credits::Line>,
 
     run: Option<RunSession>,
 }
@@ -234,7 +234,7 @@ impl KiraFrqGenApp {
             clipboard: PathClipboard::default(),
             credits_open: false,
             credits_full: true,
-            credits_text: String::new(),
+            credits_lines: Vec::new(),
             run: None,
         }
     }
@@ -345,13 +345,11 @@ impl KiraFrqGenApp {
         }
     }
 
-    /// Re-render the credits for the current full/compact choice, so the window
-    /// pays the markdown render once instead of every frame.
+    /// Re-parse the credits for the current full/compact choice, so the window
+    /// pays the markdown parse once instead of every frame.
     fn refresh_credits(&mut self) {
-        self.credits_text = kirafrq_credits::render(
-            kirafrq_credits::for_display(self.credits_full),
-            kirafrq_credits::Style::Plain,
-        );
+        self.credits_lines =
+            kirafrq_credits::document(kirafrq_credits::for_display(self.credits_full));
     }
 
     /// The Help > Credits window.
@@ -374,11 +372,7 @@ impl KiraFrqGenApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.add(
-                            egui::Label::new(RichText::new(self.credits_text.as_str()).monospace())
-                                .selectable(true)
-                                .wrap(),
-                        );
+                        crate::credits::show(ui, &self.credits_lines);
                     });
             });
         self.credits_open = open;

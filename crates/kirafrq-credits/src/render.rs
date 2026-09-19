@@ -1,8 +1,9 @@
-//! A small Markdown-to-terminal renderer for `CREDITS.md`.
+//! Write the parsed [`document`] as terminal text.
 //!
-//! The document is ours, so this handles exactly what it contains: ATX
-//! headings, `- ` bullets, `[text](url)` links, inline code, emphasis, and
-//! fenced code blocks (printed verbatim). Anything else passes through.
+//! [`Style::Plain`] drops the markup; [`Style::Ansi`] adds bold headings,
+//! coloured code and links, and a dimmed URL after each link.
+
+use crate::parse::{Line, Span, document};
 
 /// Whether the rendered text carries ANSI styling.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -16,106 +17,58 @@ pub enum Style {
 /// Render `markdown` for a terminal (or, with [`Style::Plain`], for a pipe).
 pub fn render(markdown: &str, style: Style) -> String {
     let mut out = String::with_capacity(markdown.len());
-    let mut in_fence = false;
-    for line in markdown.lines() {
-        if is_fence(line) {
-            in_fence = !in_fence;
-            continue;
-        }
-        if in_fence {
-            out.push_str(line);
-        } else if let Some((level, text)) = heading(line) {
-            out.push_str(&style.heading(level, &inline(text, style)));
-        } else if let Some((indent, text)) = bullet(line) {
-            out.push_str(indent);
-            out.push_str("- ");
-            out.push_str(&inline(text, style));
-        } else {
-            out.push_str(&inline(line, style));
+    for line in document(markdown) {
+        match line {
+            Line::Blank => {}
+            Line::Heading { level, spans } => {
+                push_styled(&mut out, style, heading_code(level), &spans);
+            }
+            Line::Bullet { indent, spans } => {
+                for _ in 0..indent {
+                    out.push(' ');
+                }
+                out.push_str("- ");
+                push_styled(&mut out, style, "", &spans);
+            }
+            Line::Text { spans } => push_styled(&mut out, style, "", &spans),
+            Line::Code { text } => out.push_str(&text),
         }
         out.push('\n');
     }
     out
 }
 
-/// The text of an ATX heading line, with its level.
-fn heading(line: &str) -> Option<(usize, &str)> {
-    let trimmed = line.trim_start();
-    let level = trimmed.bytes().take_while(|byte| *byte == b'#').count();
-    if !(1..=6).contains(&level) {
-        return None;
-    }
-    let text = trimmed[level..].strip_prefix(' ')?;
-    Some((level, text.trim_end()))
+fn heading_code(level: usize) -> &'static str {
+    if level == 1 { "1;4" } else { "1" }
 }
 
-/// The indentation and text of a `- ` / `* ` / `+ ` bullet line.
-fn bullet(line: &str) -> Option<(&str, &str)> {
-    let trimmed = line.trim_start();
-    let indent = &line[..line.len() - trimmed.len()];
-    let text = trimmed
-        .strip_prefix("- ")
-        .or_else(|| trimmed.strip_prefix("* "))
-        .or_else(|| trimmed.strip_prefix("+ "))?;
-    Some((indent, text))
+fn push_styled(out: &mut String, style: Style, code: &str, spans: &[Span]) {
+    let text = spans_to_string(spans, style);
+    out.push_str(&style.styled(code, &text));
 }
 
-fn is_fence(line: &str) -> bool {
-    line.trim_start().starts_with("```")
-}
-
-/// Apply the inline spans of `text` (links, code, emphasis), leaving anything
-/// else alone.
-fn inline(text: &str, style: Style) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while !rest.is_empty() {
-        if let Some((label, url, used)) = link(rest) {
-            out.push_str(&style.link(&inline(label, style)));
-            out.push_str(&style.link_url(url));
-            rest = &rest[used..];
-        } else if let Some((code, used)) = delimited(rest, "`") {
-            out.push_str(&style.code(code));
-            rest = &rest[used..];
-        } else if let Some((inner, used)) = delimited(rest, "**") {
-            out.push_str(&style.bold(&inline(inner, style)));
-            rest = &rest[used..];
-        } else if let Some((inner, used)) = delimited(rest, "*") {
-            out.push_str(&style.italic(&inline(inner, style)));
-            rest = &rest[used..];
+fn spans_to_string(spans: &[Span], style: Style) -> String {
+    let mut out = String::new();
+    for span in spans {
+        if span.link.is_some() {
+            out.push_str(&style.link(&span.text));
+        } else if span.code {
+            out.push_str(&style.code(&span.text));
+        } else if span.bold {
+            out.push_str(&style.bold(&span.text));
+        } else if span.italic {
+            out.push_str(&style.italic(&span.text));
         } else {
-            let ch = rest.chars().next().expect("rest is not empty");
-            out.push(ch);
-            rest = &rest[ch.len_utf8()..];
+            out.push_str(&span.text);
+        }
+        if let Some(url) = &span.link {
+            out.push_str(&style.link_url(url));
         }
     }
     out
 }
 
-/// Parse a `[label](url)` at the start of `text`; returns the label, url and
-/// the bytes consumed.
-fn link(text: &str) -> Option<(&str, &str, usize)> {
-    let rest = text.strip_prefix('[')?;
-    let label_end = rest.find("](")?;
-    let after = &rest[label_end + 2..];
-    let url_end = after.find(')')?;
-    let used = 1 + label_end + 2 + url_end + 1;
-    Some((&rest[..label_end], &after[..url_end], used))
-}
-
-/// The content between a leading `open` and the next `open`, plus the bytes
-/// consumed including both delimiters.
-fn delimited<'a>(text: &'a str, open: &str) -> Option<(&'a str, usize)> {
-    let rest = text.strip_prefix(open)?;
-    let end = rest.find(open)?;
-    Some((&rest[..end], open.len() * 2 + end))
-}
-
 impl Style {
-    fn heading(self, level: usize, text: &str) -> String {
-        self.styled(if level == 1 { "1;4" } else { "1" }, text)
-    }
-
     fn code(self, text: &str) -> String {
         self.styled("36", text)
     }

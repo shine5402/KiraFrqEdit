@@ -6,8 +6,10 @@
 
 use std::sync::OnceLock;
 
+mod parse;
 mod render;
 
+pub use parse::{Line, Span, document};
 pub use render::{Style, render};
 
 const CREDITS_MD: &str = include_str!("../../../CREDITS.md");
