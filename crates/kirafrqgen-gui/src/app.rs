@@ -415,11 +415,12 @@ impl KiraFrqGenApp {
             ui.add_space(8.0);
             let quirks = ui.add_enabled(
                 self.estimator.is_world(),
-                egui::Checkbox::new(&mut self.world_quirks, "WORLD quirks"),
+                egui::Checkbox::new(&mut self.world_quirks, "Use WORLD quirks"),
             );
             quirks.on_hover_text(
-                "The tuned WORLD path: a relative energy voicing gate that suppresses \
-                 spurious voicing over breath and noise. Applies to the WORLD estimators only.",
+                "Enable tuning and migrations for WORLD estimators that can reduce false \
+                 positive on noise or breaths. Disable this to gain the original WORLD \
+                 behavior.",
             );
 
             ui.add_space(8.0);
