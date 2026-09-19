@@ -1,7 +1,8 @@
 # Credits and third-party notices
 
-KiraFrqGen stands on other people's work. This file is the single source of truth for what
-`kirafrqgen-cli --license` prints and what the GUI's Help > Credits window shows.
+KiraFrqGen stands on other people's work. This file is the source for the credits the binaries
+show: `kirafrqgen-cli --license` prints the index below (`--license-full` adds the license
+texts), and the GUI's Help > Credits window shows all of it.
 
 ## Project credits
 
@@ -22,8 +23,8 @@ KiraFrqGen is [MIT](LICENSE).
 
 ## Rust dependencies
 
-The Rust crates linked into the binaries. This list and the license texts below are generated
-from `Cargo.lock` and `about.toml` by `cargo xtask credits`; do not edit them by hand.
+The Rust crates linked into the binaries, regenerated from `Cargo.lock` and `about.toml` by
+`cargo xtask credits`.
 
 <!-- credits:deps-summary:begin -->
 

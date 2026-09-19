@@ -20,12 +20,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> u8 {
     if cli.license || cli.license_full {
-        let credits = if cli.license_full {
-            kirafrq_credits::full()
-        } else {
-            kirafrq_credits::summary()
-        };
-        print!("{credits}");
+        print!("{}", kirafrq_credits::for_display(cli.license_full));
         return 0;
     }
     let path = cli

@@ -343,8 +343,7 @@ impl KiraFrqGenApp {
         }
     }
 
-    /// The Help > Credits window: a read-only, scrollable, selectable view of
-    /// `CREDITS.md`, the same text `kirafrqgen-cli --license` prints.
+    /// The Help > Credits window.
     fn credits_window(&mut self, ctx: &egui::Context) {
         if !self.credits_open {
             return;
@@ -356,11 +355,7 @@ impl KiraFrqGenApp {
             .resizable(true)
             .show(ctx, |ui| {
                 ui.checkbox(&mut self.credits_full, "Show full license texts");
-                let credits = if self.credits_full {
-                    kirafrq_credits::full()
-                } else {
-                    kirafrq_credits::summary()
-                };
+                let credits = kirafrq_credits::for_display(self.credits_full);
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {

@@ -14,8 +14,7 @@ use kirafrqgen_core::{Estimator, F0Config, Target};
     about = "Bulk-generate frq tables for your UTAU voicebank."
 )]
 pub struct Cli {
-    /// A voicebank folder (recursive scan) or a single .wav file. Not needed
-    /// with `--license` or `--license-full`.
+    /// A voicebank folder (recursive scan) or a single .wav file.
     #[arg(value_name = "PATH", required_unless_present_any = ["license", "license_full"])]
     pub path: Option<PathBuf>,
 

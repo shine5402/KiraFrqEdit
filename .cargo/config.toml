@@ -1,3 +1,2 @@
 [alias]
-# `cargo xtask credits` runs the repository maintenance binary; see xtask/.
 xtask = "run --package xtask --"
