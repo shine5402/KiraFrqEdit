@@ -153,19 +153,20 @@ pub(crate) fn analyze(
 pub(crate) fn d4c_aperiodicity0(
     samples: &[f64],
     sample_rate: u32,
-    track: &F0Track,
+    temporal_positions: &[f64],
+    f0_hz: &[f64],
 ) -> Result<Vec<f64>, WorldError> {
     let x_length = to_c_int(samples.len(), WorldError::TooLong)?;
     let fs = to_c_int(sample_rate as usize, WorldError::InvalidSampleRate)?;
-    let f0_length = to_c_int(track.f0_hz.len(), WorldError::TooLong)?;
-    let mut aperiodicity0 = vec![0.0f64; track.f0_hz.len()];
+    let f0_length = to_c_int(f0_hz.len(), WorldError::TooLong)?;
+    let mut aperiodicity0 = vec![0.0f64; f0_hz.len()];
     unsafe {
         kfw_d4c_aperiodicity0(
             samples.as_ptr(),
             x_length,
             fs,
-            track.temporal_positions.as_ptr(),
-            track.f0_hz.as_ptr(),
+            temporal_positions.as_ptr(),
+            f0_hz.as_ptr(),
             f0_length,
             aperiodicity0.as_mut_ptr(),
         );

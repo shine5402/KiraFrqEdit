@@ -102,6 +102,11 @@ pub struct F0Config {
     /// Internal, kept out of the headline API.
     #[doc(hidden)]
     pub energy_gate_ratio: f64,
+    /// The aperiodicity gate's threshold (#64): a voiced Harvest frame whose
+    /// raw D4C LoveTrain statistic is below this is forced unvoiced. Internal,
+    /// kept out of the headline API.
+    #[doc(hidden)]
+    pub aperiodicity_gate_threshold: f64,
     /// The ML estimator's model and threshold (#48/#53); consulted only when
     /// [`Estimator::Rmvpe`] is selected.
     pub ml: MlConfig,
@@ -117,6 +122,7 @@ impl Default for F0Config {
             stone_mask: true,
             world_quirks: true,
             energy_gate_ratio: 0.05,
+            aperiodicity_gate_threshold: 0.85,
             ml: MlConfig::default(),
         }
     }
@@ -162,6 +168,20 @@ pub trait F0Estimator: Send + Sync {
     /// estimator must opt in.
     fn supports_stonemask(&self) -> bool {
         false
+    }
+
+    /// The raw D4C LoveTrain aperiodicity statistic per frame, for the tuned
+    /// WORLD path's aperiodicity gate (#64). `Ok(None)` means the estimator
+    /// has no such statistic (the ML tier, or a WORLD estimator that does not
+    /// compute it), so the gate is skipped. The pipeline only asks on the
+    /// Harvest path; a failure is a per-file failure like StoneMask.
+    fn aperiodicity0(
+        &self,
+        _samples: &[f64],
+        _sample_rate: u32,
+        _track: &F0Track,
+    ) -> Result<Option<Vec<f64>>, GeneratorError> {
+        Ok(None)
     }
 }
 
@@ -236,6 +256,22 @@ impl F0Estimator for WorldEstimator {
         track.temporal_positions = world_track.temporal_positions;
         track.f0_hz = world_track.f0_hz;
         Ok(())
+    }
+
+    fn aperiodicity0(
+        &self,
+        samples: &[f64],
+        sample_rate: u32,
+        track: &F0Track,
+    ) -> Result<Option<Vec<f64>>, GeneratorError> {
+        let statistic = kirafrq_world_binding::d4c_aperiodicity0(
+            samples,
+            sample_rate,
+            &track.temporal_positions,
+            &track.f0_hz,
+        )
+        .map_err(|error| GeneratorError::Estimation(error.to_string()))?;
+        Ok(Some(statistic))
     }
 
     fn supports_stonemask(&self) -> bool {
@@ -563,5 +599,29 @@ impl std::error::Error for GeneratorError {
             GeneratorError::Scan { error, .. } => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_world_estimator_exposes_the_d4c_statistic_per_frame() {
+        let sample_rate = 44_100u32;
+        let samples: Vec<f64> = (0..sample_rate)
+            .map(|n| (2.0 * std::f64::consts::PI * 220.0 * n as f64 / sample_rate as f64).sin())
+            .collect();
+        let estimator = WorldEstimator::new(F0Config::default());
+        let track = estimator
+            .estimate(&samples, sample_rate, crate::table::frame_period_ms(), None)
+            .unwrap();
+
+        let statistic = estimator
+            .aperiodicity0(&samples, sample_rate, &track)
+            .unwrap()
+            .expect("the WORLD estimator provides the statistic");
+
+        assert_eq!(statistic.len(), track.f0_hz.len());
     }
 }
