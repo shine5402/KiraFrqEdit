@@ -6,8 +6,20 @@ behavior — can change without notice.
 ## Credits
 
 Pitch analysis is [WORLD](https://github.com/mmorise/World) (DIO / Harvest, StoneMask
-refinement) by M. Morise and contributors, vendored under `third_party/World`. Other
-dependencies are the Rust crates listed in the `Cargo.toml` files.
+refinement) by M. Morise and contributors, vendored under `third_party/World`.
+
+The ML estimator runs [RMVPE](https://github.com/Dream-High/RMVPE) by H. Wei, X. Cao, T. Dan
+and Y. Chen ([Interspeech 2023](https://arxiv.org/abs/2306.15412)) through
+[ONNX Runtime](https://onnxruntime.ai/) (MIT), linked via the
+[`ort`](https://github.com/pykeio/ort) crate. Other dependencies are the Rust crates listed in
+the `Cargo.toml` files.
+
+## ML model
+
+The RMVPE weights are not redistributed with this project. You can get a usable `rmvpe.onnx`
+(361 MB) here:
+[lj1995/VoiceConversionWebUI/rmvpe.onnx](https://huggingface.co/lj1995/VoiceConversionWebUI/blob/main/rmvpe.onnx).
+Put the file next to the executable (or in the directory named by `KIRAFRQ_ML_DIR`).
 
 ## License
 
