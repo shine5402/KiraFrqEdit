@@ -540,31 +540,6 @@ fn rmvpe_without_a_model_errors_with_the_download_hint() {
 }
 
 #[test]
-fn no_recommended_tuning_with_rmvpe_warns_and_continues() {
-    if !cfg!(feature = "ml") {
-        // The compat build has no `rmvpe` value, so there is nothing to warn
-        // about; the usage error is covered above.
-        return;
-    }
-    let scratch = Scratch::new("rmvpe-tuning");
-    scratch.write("bank/A2.wav", b"placeholder");
-
-    // No model in the test environment: the run fails at the factory, but the
-    // warning is emitted first and the failure is the model error, not the
-    // flag.
-    let run = cli(
-        &scratch.0,
-        &["bank", "--estimator", "rmvpe", "--no-recommended-tuning"],
-    );
-    assert_eq!(run.code, 1, "{}", run.stderr);
-    assert!(
-        run.stderr.contains("--no-recommended-tuning has no effect"),
-        "{}",
-        run.stderr
-    );
-}
-
-#[test]
 fn no_recommended_tuning_with_a_world_estimator_is_silent() {
     let scratch = Scratch::new("recommended-tuning");
     write_tone(&scratch, "bank/A2.wav");
@@ -575,16 +550,16 @@ fn no_recommended_tuning_with_a_world_estimator_is_silent() {
     );
     assert!(
         !run.stderr.contains("no effect"),
-        "a WORLD estimator accepts the flag: {}",
+        "the flag is accepted without comment: {}",
         run.stderr
     );
     assert!(scratch.path("bank/A2_wav.frq").exists());
 }
 
-/// #71: the tuning covers the WORLD pair only, so an explicit opt-out with an
-/// ML estimator also warns (SwiftF0 is the one that needs no model).
+/// #71/#70: the tuning covers every estimator but RMVPE, so an explicit
+/// opt-out with SwiftF0 is a plain run, not a warned no-op.
 #[test]
-fn no_recommended_tuning_with_swiftf0_warns() {
+fn no_recommended_tuning_with_swiftf0_is_silent() {
     if !cfg!(feature = "ml") {
         return;
     }
@@ -596,8 +571,8 @@ fn no_recommended_tuning_with_swiftf0_warns() {
         &["bank", "--estimator", "swiftf0", "--no-recommended-tuning"],
     );
     assert!(
-        run.stderr.contains("--no-recommended-tuning has no effect"),
-        "{}",
+        !run.stderr.contains("no effect"),
+        "the flag is accepted without comment: {}",
         run.stderr
     );
     assert!(scratch.path("bank/A2_wav.frq").exists());

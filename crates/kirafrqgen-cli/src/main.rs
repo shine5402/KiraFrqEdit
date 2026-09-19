@@ -102,11 +102,7 @@ fn run(cli: Cli) -> u8 {
     }
 
     // The estimator factory resolves the ML model up front (#49): a missing
-    // model is a single early error, before any file is touched. The tuning
-    // warning fires first, so an explicit switch is always acknowledged.
-    if let Some(warning) = recommended_tuning_warning(&cli, verbosity) {
-        eprintln!("warning: {warning}");
-    }
+    // model is a single early error, before any file is touched.
     let estimator = match build_estimator(&opts.f0, opts.jobs) {
         Ok(estimator) => estimator,
         Err(error) => {
@@ -122,22 +118,6 @@ fn run(cli: Cli) -> u8 {
             1
         }
     }
-}
-
-/// #49/#71: an explicit recommended-tuning switch alongside an estimator that
-/// never uses it is a warned no-op; the run continues. The tuning currently
-/// covers the WORLD pair only, so the ML estimators warn.
-fn recommended_tuning_warning(cli: &Cli, verbosity: Verbosity) -> Option<String> {
-    if !cli.no_recommended_tuning || verbosity == Verbosity::Quiet {
-        return None;
-    }
-    if !cli.estimator().is_world() {
-        return Some(
-            "--no-recommended-tuning has no effect: it applies to the WORLD estimators only"
-                .to_string(),
-        );
-    }
-    None
 }
 
 /// `--ensure-japanese-codepage` (#10/#12): mrq-only, a silent no-op on code

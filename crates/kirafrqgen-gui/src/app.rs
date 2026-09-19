@@ -436,10 +436,7 @@ impl KiraFrqGenApp {
             }
 
             ui.add_space(8.0);
-            ui.add_enabled(
-                self.estimator.is_world(),
-                egui::Checkbox::new(&mut self.recommended_tuning, "Apply recommended tuning"),
-            );
+            ui.checkbox(&mut self.recommended_tuning, "Apply recommended tuning");
             ui.add(egui::Label::new(RichText::new(RECOMMENDED_TUNING_LABEL).weak()).wrap());
 
             ui.add_space(8.0);

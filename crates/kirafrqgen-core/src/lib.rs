@@ -42,10 +42,11 @@ pub enum Estimator {
 }
 
 impl Estimator {
-    /// Whether this is one of the WORLD DSP estimators. The energy voicing
-    /// gate (#54) is a WORLD workaround, so it applies to those only (#53).
-    pub fn is_world(self) -> bool {
-        matches!(self, Estimator::Dio | Estimator::Harvest)
+    /// Whether recommended tuning's energy voicing gate (#54) applies: every
+    /// estimator except RMVPE, whose model confidence is its own voicing
+    /// policy (#53/#62/#70).
+    pub fn supports_energy_gate(self) -> bool {
+        !matches!(self, Estimator::Rmvpe)
     }
 
     /// The user-facing one-liner the front ends show for this estimator.
@@ -110,8 +111,8 @@ pub struct F0Config {
     pub ceiling_hz: f64,
     pub stone_mask: bool,
     /// "Apply recommended tuning" (#46/#54/#62): when false the estimator's
-    /// output is written as-is, with no energy voicing gate (WORLD and
-    /// SwiftF0) and no aperiodicity gate (Harvest). CLI/GUI surfacing is
+    /// output is written as-is, with no energy voicing gate (every estimator
+    /// but RMVPE) and no aperiodicity gate (Harvest). CLI/GUI surfacing is
     /// #49/#71.
     pub recommended_tuning: bool,
     /// The energy voicing gate's threshold (#54): a voiced frame quieter than

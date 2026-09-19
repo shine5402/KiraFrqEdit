@@ -1033,10 +1033,10 @@ fn an_estimator_without_stonemask_is_never_refined_even_with_the_flag_on() {
 }
 
 #[test]
-fn the_energy_gate_is_world_only() {
-    // #53: the WORLD energy gate is a WORLD workaround; an ML estimator's
-    // voicing policy must survive `recommended_tuning` untouched.
-    let scratch = Scratch::new("ml-no-energy-gate");
+fn the_energy_gate_skips_rmvpe() {
+    // #53/#62/#70: RMVPE's model confidence is its own voicing policy, so its
+    // output must survive `recommended_tuning` untouched.
+    let scratch = Scratch::new("rmvpe-no-energy-gate");
     write_wav(&scratch, "A2.wav", mono(), &gated_samples());
     let estimator = FakeEstimator::new(&[110.0, 220.0, 330.0, 440.0, 550.0]);
 
@@ -1049,7 +1049,28 @@ fn the_energy_gate_is_world_only() {
     assert_eq!(
         table.f0_hz,
         [110.0, 220.0, 330.0, 440.0, 0.0],
-        "no energy gate on the ML path"
+        "no energy gate on the RMVPE path"
+    );
+}
+
+#[test]
+fn the_energy_gate_applies_to_swiftf0() {
+    // #70: the energy gate covers SwiftF0 like the WORLD pair; only RMVPE is
+    // left to its model confidence.
+    let scratch = Scratch::new("swiftf0-energy-gate");
+    write_wav(&scratch, "A2.wav", mono(), &gated_samples());
+    let estimator = FakeEstimator::new(&[110.0, 220.0, 330.0, 440.0, 550.0]);
+
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.estimator = kirafrqgen_core::Estimator::SwiftF0;
+    assert!(opts.f0.recommended_tuning, "the default is the tuned path");
+    run(&opts, &estimator);
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(
+        table.f0_hz,
+        [110.0, 0.0, 330.0, 440.0, 0.0],
+        "the quiet frame is gated on the SwiftF0 path"
     );
 }
 

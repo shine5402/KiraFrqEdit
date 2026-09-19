@@ -35,9 +35,9 @@ refinement — the traditional DSP estimators — or an **ML estimator**. _Avoid
 
 ## ML estimator
 
-An f0 estimator backed by a neural model rather than a DSP algorithm. Its voicing comes from the
-model's own confidence, not from the energy voicing gate, and it has no StoneMask stage. RMVPE and
-SwiftF0 are the supported ones. _Avoid_: calling it a "resampler" or "engine".
+An f0 estimator backed by a neural model rather than a DSP algorithm. It has no StoneMask stage.
+RMVPE and SwiftF0 are the supported ones; RMVPE's voicing comes from the model's own confidence,
+while SwiftF0's is shaped by the energy voicing gate. _Avoid_: calling it a "resampler" or "engine".
 
 ## Model file
 
@@ -56,10 +56,10 @@ for every wrong voiced/unvoiced decision. _Avoid_: "over-voicing" in canonical p
 ## Recommended tuning
 
 The umbrella toggle (on by default) that applies KiraFrqGen's post-estimation voicing workarounds
-on top of the raw estimator output: the energy voicing gate (the WORLD pair) and the Harvest-only
-aperiodicity gate. Turned off, the estimator's output is written as-is. The GUI checkbox is
-"Apply recommended tuning"; the CLI opt-out is `--no-recommended-tuning`. _Avoid_: "WORLD quirks"
-(the former name) and bare "tuning".
+on top of the raw estimator output: the energy voicing gate (every estimator but RMVPE) and the
+Harvest-only aperiodicity gate. Turned off, the estimator's output is written as-is. The GUI
+checkbox is "Apply recommended tuning"; the CLI opt-out is `--no-recommended-tuning`. _Avoid_:
+"WORLD quirks" (the former name) and bare "tuning".
 
 ## Energy voicing gate
 
