@@ -42,9 +42,9 @@ SwiftF0 are the supported ones. _Avoid_: calling it a "resampler" or "engine".
 ## Model file
 
 The weights file an ML estimator loads. RMVPE's `rmvpe.onnx` is user-supplied, looked up in the
-executable's directory and then `KIRAFRQ_ML_DIR`; its presence is what makes the RMVPE option
-available, and selecting it without one is an error, not a fallback to WORLD. SwiftF0's
-`swiftf0.onnx` uses the same lookup as an override but ships bundled, so no file is needed.
+executable's directory and then `KIRAFRQ_ML_DIR`; without it RMVPE cannot run — the GUI disables
+Generate and the CLI errors — never a fallback to WORLD. SwiftF0's `swiftf0.onnx` uses the same
+lookup as an override but ships bundled, so no file is needed.
 _Avoid_: "weights" alone when the on-disk artifact is meant.
 
 ## Spurious voicing

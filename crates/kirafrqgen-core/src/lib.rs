@@ -48,8 +48,7 @@ impl Estimator {
         matches!(self, Estimator::Dio | Estimator::Harvest)
     }
 
-    /// The user-facing one-liner the front ends show for this estimator
-    /// (wording fixed in #49).
+    /// The user-facing one-liner the front ends show for this estimator.
     pub fn description(self) -> &'static str {
         match self {
             Estimator::Dio => {
@@ -57,9 +56,7 @@ impl Estimator {
                  A traditional DSP-based algorithm from WORLD."
             }
             Estimator::Harvest => "Robust, but slow. A traditional DSP-based algorithm from WORLD.",
-            Estimator::Rmvpe => {
-                "Fast and reliable ML based estimator. Requires model to be present."
-            }
+            Estimator::Rmvpe => "Fast and reliable ML based estimator.",
             Estimator::SwiftF0 => {
                 "Fast and reliable ML based estimator. Comes with a bundled model."
             }
@@ -477,8 +474,8 @@ pub const ML_DOWNLOAD_HINT: &str = "RMVPE weights are not redistributed with Kir
 pub const ML_SUPPORTED: bool = cfg!(feature = "ml");
 
 /// Whether RMVPE can run right now: the feature is on and a model file
-/// resolves. Used by the front ends to pick the capability-aware default
-/// (#49) and to grey the option out.
+/// resolves. The front ends use it for the capability-aware default (#49) and
+/// for the model-missing UX (#72).
 pub fn ml_available(config: &F0Config) -> bool {
     if !ML_SUPPORTED {
         return false;
@@ -677,6 +674,11 @@ impl std::error::Error for GeneratorError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_rmvpe_description_does_not_mention_a_required_model() {
+        assert!(!Estimator::Rmvpe.description().contains("Requires model"));
+    }
 
     #[test]
     fn the_world_estimator_exposes_the_d4c_statistic_per_frame() {
