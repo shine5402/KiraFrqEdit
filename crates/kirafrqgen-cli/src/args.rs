@@ -27,7 +27,9 @@ pub struct Cli {
     #[arg(long, value_enum)]
     pub estimator: Option<EstimatorArg>,
 
-    /// Disable the tuned WORLD path (the energy voicing gate); WORLD only.
+    /// Enable tuning and migrations for WORLD estimators that can reduce false
+    /// positive on noise or breaths. Disable this to gain the original WORLD
+    /// behavior.
     #[arg(long)]
     pub no_world_quirks: bool,
 
