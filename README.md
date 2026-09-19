@@ -19,9 +19,7 @@ the `Cargo.toml` files.
 The RMVPE weights are not redistributed with this project. Download `rmvpe.onnx` from the
 mirror the ecosystem uses, on Hugging Face:
 [lj1995/VoiceConversionWebUI/rmvpe.onnx](https://huggingface.co/lj1995/VoiceConversionWebUI/blob/main/rmvpe.onnx).
-Put the file next to the executable (or in the directory named by `KIRAFRQ_ML_DIR`). The
-[ML estimator notes](docs/research/ml-f0-estimators.md) record the model's provenance and
-licensing.
+Put the file next to the executable (or in the directory named by `KIRAFRQ_ML_DIR`).
 
 ## License
 
