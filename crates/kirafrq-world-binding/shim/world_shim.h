@@ -21,6 +21,12 @@ void kfw_stonemask(const double *x, int x_length, int fs,
                    const double *temporal_positions, const double *f0,
                    int f0_length, double *refined_f0);
 
+// Raw D4C LoveTrain statistic per frame (#55 probe); frames with f0 == 0
+// read 0.0. One output value per input f0 frame.
+void kfw_d4c_aperiodicity0(const double *x, int x_length, int fs,
+                           const double *temporal_positions, const double *f0,
+                           int f0_length, double *aperiodicity0);
+
 // Frame-progress hook (#34): installed around one analysis call on the
 // calling thread; the vendored loops call it with (stage, done, total).
 // Must match kfw_progress_hook_fn in progress_hook.h.

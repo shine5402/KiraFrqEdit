@@ -4,6 +4,7 @@ fn main() {
         "dio.cpp",
         "harvest.cpp",
         "stonemask.cpp",
+        "d4c.cpp",
         "common.cpp",
         "fft.cpp",
         "matlabfunctions.cpp",
