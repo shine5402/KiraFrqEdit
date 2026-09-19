@@ -3,6 +3,7 @@
 //! KiraFrqGen: the egui front end over `kirafrqgen-core` (#23, shell B from #13).
 
 mod app;
+mod credits;
 mod run;
 mod text_ops;
 mod tree;

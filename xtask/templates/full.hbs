@@ -1,0 +1,10 @@
+## Full license texts
+
+{{#each licenses}}{{#if first_of_kind}}### {{{name}}} ({{{id}}})
+{{/if}}
+Used by: {{#each used_by}}{{#unless @first}}, {{/unless}}{{{crate.name}}} {{{crate.version}}}{{/each}}
+
+````text
+{{{text}}}
+````
+{{/each}}
