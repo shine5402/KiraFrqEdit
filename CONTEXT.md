@@ -44,8 +44,8 @@ and it has no StoneMask stage. RMVPE is the supported one. _Avoid_: calling it a
 
 The user-supplied weights file an ML estimator loads, `rmvpe.onnx`, looked up in the executable's
 directory and then `KIRAFRQ_ML_DIR`. Its presence is what makes the ML tier runnable: without it the
-estimator stays selectable but cannot generate — selecting it is an error, not a fallback to WORLD.
-_Avoid_: "weights" alone when the on-disk artifact is meant.
+estimator stays selectable but cannot run — the GUI disables Generate, the CLI errors — never a
+fallback to WORLD. _Avoid_: "weights" alone when the on-disk artifact is meant.
 
 ## Spurious voicing
 

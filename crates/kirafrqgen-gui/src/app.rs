@@ -22,13 +22,10 @@ use crate::run::{Row, RunState, Status};
 use crate::text_ops::{self, CharRange};
 use crate::tree::{DirNode, Targets, Tree, WavEntry, missing_label, target_name};
 
-/// Where the model-missing hint sends the user (#72): the README's `ML model`
-/// section, which documents `rmvpe.onnx` and its lookup directories.
+/// The README's `ML model` section, the model-missing hint's target (#72).
 const MODEL_HELP_URL: &str =
     "https://github.com/shine5402/KiraFrqEdit/blob/main/README.md#ml-model";
 
-/// Whether the selected estimator can run right now (#72): RMVPE needs a
-/// resolved model file, the WORLD pair never does.
 fn estimator_runnable(estimator: Estimator, ml_available: bool) -> bool {
     estimator != Estimator::Rmvpe || ml_available
 }
@@ -185,7 +182,8 @@ pub struct KiraFrqGenApp {
     // Options (session-only).
     estimator: Estimator,
     /// Whether the ML tier can run; resolves the capability-aware default
-    /// once at startup (#49) and greys the RMVPE radio when false.
+    /// once at startup (#49) and gates RMVPE runs and the model-missing hint
+    /// (#72).
     ml_available: bool,
     world_quirks: bool,
     targets: Targets,
@@ -404,9 +402,9 @@ impl KiraFrqGenApp {
             ui.horizontal(|ui| {
                 ui.radio_value(&mut self.estimator, Estimator::Harvest, "Harvest");
                 ui.radio_value(&mut self.estimator, Estimator::Dio, "DIO");
-                // #48: the compat build has no ML option at all. #72: a
-                // missing model must not disable the row; the red hint below
-                // and the disabled Generate carry the unavailability instead.
+                // #48: the compat build has no ML option at all. A missing
+                // model leaves the ML radio enabled; the hint below and the
+                // disabled Generate carry the unavailability (#72).
                 if cfg!(feature = "ml") {
                     ui.radio_value(&mut self.estimator, Estimator::Rmvpe, "RMVPE");
                 }
@@ -1323,7 +1321,6 @@ mod tests {
     fn an_unavailable_estimator_cannot_run() {
         assert!(estimator_runnable(Estimator::Rmvpe, true));
         assert!(!estimator_runnable(Estimator::Rmvpe, false));
-        // The WORLD pair never needs a model (#72).
         assert!(estimator_runnable(Estimator::Dio, false));
         assert!(estimator_runnable(Estimator::Harvest, false));
     }
