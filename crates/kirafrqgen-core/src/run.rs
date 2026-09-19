@@ -269,9 +269,8 @@ fn process_wav(
         return WavResult { report, mrq: None };
     }
 
-    // The tuned path's post-pass (#54): estimator-agnostic, after refinement
-    // and before the table sees the track, so an estimator that voices noise
-    // gets its quiet frames forced unvoiced (Harvest and DIO alike).
+    // The tuned path's post-pass (#54): estimator-agnostic, so any estimator
+    // that voices noise gets its quiet frames forced unvoiced.
     if opts.f0.world_quirks {
         voicing::apply_energy_gate(&decoded.samples, &mut track, opts.f0.energy_gate_ratio);
     }
@@ -610,6 +609,11 @@ fn validate(opts: &GenerateOptions) -> Result<(), GeneratorError> {
     {
         return Err(GeneratorError::Config(
             "f0 floor and ceiling must be finite with 0 < floor < ceiling".to_string(),
+        ));
+    }
+    if !f0.energy_gate_ratio.is_finite() || f0.energy_gate_ratio < 0.0 {
+        return Err(GeneratorError::Config(
+            "the energy gate ratio must be finite and non-negative".to_string(),
         ));
     }
     Ok(())

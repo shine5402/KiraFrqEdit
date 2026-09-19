@@ -36,16 +36,16 @@ refinement. _Avoid_: "engine" for these.
 ## Spurious voicing
 
 Frames an f0 estimator marks voiced over breath, noise or near-silence — most visibly a low, flat f0
-line through a noise floor. The name is for that failure class, not for every wrong
-voiced/unvoiced decision. _Avoid_: "over-voicing" in canonical prose.
+line through a noise floor. The tuned WORLD path exists to suppress this class; it is not a name
+for every wrong voiced/unvoiced decision. _Avoid_: "over-voicing" in canonical prose.
 
 ## Energy voicing gate
 
-The tuned WORLD path's post-pass over an f0 track: a frame stays voiced only if its frq amplitude
-(see Amplitude) is at least 5% of the file's p90 voiced-frame amplitude. Applied to Harvest and DIO
-alike, after StoneMask and before the table is built; no voiced frames or a zero p90 leaves the
-track untouched. It targets quiet, noise-floor voicing — breath and onsets at speech level pass
-through. _Avoid_: bare "gate" when another stage is meant.
+The workaround the tuned WORLD path applies to spurious voicing: a frame is kept voiced only when
+its per-frame amplitude clears a relative share of the file's voiced-frame loudness (KiraFrqGen's
+computed amplitude, not one read from an existing frq). It targets the quiet noise-floor class —
+breath and onsets at speech level pass through. _Avoid_: bare "gate" — an aperiodicity gate is a
+different stage.
 
 ## Resampler
 

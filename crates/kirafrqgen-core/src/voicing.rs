@@ -1,14 +1,13 @@
-//! The energy voicing gate (#54): the tuned path's post-pass over an f0 track,
-//! forcing frames quieter than a share of the file's voiced-frame amplitude
-//! unvoiced.
+//! The energy voicing gate (#54): the tuned WORLD path's post-pass over an f0
+//! track, forcing frames quieter than a share of the file's voiced-frame
+//! amplitude unvoiced.
 
 use crate::F0Track;
 use crate::table::amplitudes;
 
 /// Force frames below `ratio` of the file's p90 voiced-frame amplitude
-/// unvoiced (#46/#54). The reference is the p90 of the frq amplitudes of the
-/// frames the track calls voiced; no voiced frames or a zero p90 is a no-op,
-/// so a silence-only file can never produce NaN or a degenerate table.
+/// unvoiced (#46/#54). A no-op when the track has no voiced frame or the p90
+/// is zero, so a silence-only file cannot turn into a degenerate table.
 pub(crate) fn apply_energy_gate(samples: &[f64], track: &mut F0Track, ratio: f64) {
     let amplitudes = amplitudes(samples);
     let Some(reference) = voiced_p90(&amplitudes, &track.f0_hz) else {
@@ -25,8 +24,8 @@ pub(crate) fn apply_energy_gate(samples: &[f64], track: &mut F0Track, ratio: f64
     }
 }
 
-/// The p90 of the amplitudes of the voiced frames (`f0 > 0`), `None` when no
-/// frame is voiced; `NaN` frames are not voiced (#8 reads them unvoiced).
+/// The p90 of the voiced frames' amplitudes: `f0 > 0`, with `NaN` excluded
+/// (#8 reads non-finite f0 as unvoiced).
 fn voiced_p90(amplitudes: &[f64], f0_hz: &[f64]) -> Option<f64> {
     let mut voiced: Vec<f64> = f0_hz
         .iter()
@@ -41,7 +40,7 @@ fn voiced_p90(amplitudes: &[f64], f0_hz: &[f64]) -> Option<f64> {
 }
 
 /// Linear-interpolated percentile (the `np.percentile` default), so a small
-/// voiced set interpolates between order statistics instead of snapping.
+/// voiced set interpolates between order statistics.
 fn percentile(sorted: &[f64], fraction: f64) -> f64 {
     let position = (sorted.len() - 1) as f64 * fraction;
     let lower = position.floor() as usize;
@@ -53,21 +52,24 @@ fn percentile(sorted: &[f64], fraction: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::table::{HOP_SAMPLES, frame_period_ms};
 
-    const HOP: usize = 256;
+    const HOP: usize = HOP_SAMPLES as usize;
 
     fn track(f0_hz: &[f64]) -> F0Track {
+        let period = frame_period_ms();
         F0Track {
-            frame_period_ms: HOP as f64 / 44_100.0 * 1000.0,
+            frame_period_ms: period,
             temporal_positions: (0..f0_hz.len())
-                .map(|index| index as f64 * HOP as f64 / 44_100.0)
+                .map(|index| index as f64 * period / 1000.0)
                 .collect(),
             f0_hz: f0_hz.to_vec(),
         }
     }
 
     /// Constant samples per `(value, length)` window; frame `i` reads window
-    /// `i` (the last window may be short).
+    /// `i` (the last window may be short). A full window of `value` reads a frq
+    /// amplitude of `32768 * value`, so `0.25` reads `8192.0`.
     fn samples(windows: &[(f64, usize)]) -> Vec<f64> {
         windows
             .iter()
@@ -75,7 +77,6 @@ mod tests {
             .collect()
     }
 
-    /// `32768 * value` per full window, so `0.25` reads `8192.0`.
     #[test]
     fn gate_zeroes_frames_below_five_percent_of_the_voiced_p90() {
         let samples = samples(&[(0.25, HOP), (0.001, HOP), (0.25, HOP), (0.25, 128)]);
@@ -140,12 +141,15 @@ mod tests {
     }
 
     #[test]
-    fn gate_never_emits_nan() {
+    fn gate_never_introduces_nan() {
         let samples = samples(&[(0.001, HOP), (0.25, HOP), (0.25, HOP)]);
         let mut track = track(&[f64::NAN, 220.0, 330.0]);
 
         apply_energy_gate(&samples, &mut track, 0.05);
 
-        assert!(track.f0_hz.iter().all(|value| value.is_finite()));
+        assert!(
+            track.f0_hz.iter().all(|value| value.is_finite()),
+            "the gate only ever writes 0.0"
+        );
     }
 }

@@ -38,20 +38,19 @@ pub struct F0Config {
     pub floor_hz: f64,
     pub ceiling_hz: f64,
     pub stone_mask: bool,
-    /// The tuned path (#46/#54): apply KiraFrqGen's workarounds on top of
-    /// WORLD. `false` keeps the estimator's untouched output; today the only
-    /// quirk is the energy voicing gate. CLI/GUI surfacing is #49.
+    /// The tuned WORLD path (#46/#54): when false the estimator's output is
+    /// written as-is, with no energy voicing gate. CLI/GUI surfacing is #49.
     pub world_quirks: bool,
     /// The energy voicing gate's threshold (#54): a voiced frame quieter than
     /// this share of the file's p90 voiced-frame amplitude is forced unvoiced.
-    /// Internal — not a headline knob.
+    /// Internal, kept out of the headline API.
+    #[doc(hidden)]
     pub energy_gate_ratio: f64,
 }
 
 impl Default for F0Config {
     fn default() -> Self {
-        // Standing defaults (map Notes): Harvest with StoneMask, 71-800 Hz,
-        // and the tuned path (#46).
+        // Standing defaults (map Notes): Harvest with StoneMask, 71-800 Hz.
         Self {
             estimator: Estimator::Harvest,
             floor_hz: 71.0,

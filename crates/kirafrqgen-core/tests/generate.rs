@@ -927,6 +927,25 @@ fn missing_and_wavless_roots_are_fatal() {
     ));
 }
 
+#[test]
+fn an_invalid_energy_gate_ratio_is_a_config_error() {
+    let scratch = Scratch::new("gate-ratio");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 512]);
+    let estimator = FakeEstimator::new(&[220.0]);
+
+    for ratio in [f64::NAN, -0.01] {
+        let mut opts = options(&scratch.0, &[Target::Frq]);
+        opts.f0.energy_gate_ratio = ratio;
+        assert!(
+            matches!(
+                run_result(&opts, &estimator),
+                Err(GeneratorError::Config(_))
+            ),
+            "ratio {ratio} must be rejected"
+        );
+    }
+}
+
 // --- estimator wiring -------------------------------------------------------
 
 #[test]
