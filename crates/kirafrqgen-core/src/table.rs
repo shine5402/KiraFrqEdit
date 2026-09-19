@@ -67,7 +67,7 @@ pub(crate) fn build_table(
 
 /// `2^15 * mean(|x|)` per frame, the divisor clipping to the partial last
 /// window; the empty trailing frame of an `L % hop == 0` wav is `0.0` (#8).
-fn amplitudes(samples: &[f64]) -> Vec<f64> {
+pub(crate) fn amplitudes(samples: &[f64]) -> Vec<f64> {
     let hop = HOP_SAMPLES as usize;
     let frames = samples.len() / hop + 1;
     (0..frames)

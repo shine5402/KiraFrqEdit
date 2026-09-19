@@ -23,6 +23,7 @@ use rayon::prelude::*;
 use crate::paths;
 use crate::scan::scan_wavs;
 use crate::table::{SAMPLE_RATE, build_table, frame_period_ms};
+use crate::voicing;
 use crate::{
     CancelToken, F0Estimator, FilePlan, FileReport, GenerateOptions, GeneratorError, Progress,
     RunPlan, RunSummary, Target, llsm,
@@ -266,6 +267,13 @@ fn process_wav(
         report.failures.push(format!("StoneMask: {error}"));
         progress.file_finished(&report);
         return WavResult { report, mrq: None };
+    }
+
+    // The tuned path's post-pass (#54): estimator-agnostic, after refinement
+    // and before the table sees the track, so an estimator that voices noise
+    // gets its quiet frames forced unvoiced (Harvest and DIO alike).
+    if opts.f0.world_quirks {
+        voicing::apply_energy_gate(&decoded.samples, &mut track, opts.f0.energy_gate_ratio);
     }
 
     let table = build_table(
