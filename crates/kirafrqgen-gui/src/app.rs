@@ -407,6 +407,9 @@ impl KiraFrqGenApp {
                 // disabled Generate carry the unavailability (#72).
                 if cfg!(feature = "ml") {
                     ui.radio_value(&mut self.estimator, Estimator::Rmvpe, "RMVPE");
+                    // #69: SwiftF0 ships a bundled model, so it is always
+                    // selectable in a modern build.
+                    ui.radio_value(&mut self.estimator, Estimator::SwiftF0, "SwiftF0");
                 }
             });
             ui.label(RichText::new(self.estimator.description()).weak());

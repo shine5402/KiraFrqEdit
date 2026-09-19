@@ -17,6 +17,16 @@ rubato.workspace = true
 ort = { workspace = true, optional = true }
 realfft = { workspace = true, optional = true }
 
+[dev-dependencies]
+# The bundled SwiftF0 model's pinned-commit provenance check (#69).
+sha2 = "0.10"
+# Decoding wavs for the local SwiftF0 parity probe (#69).
+kirafrq-audio.workspace = true
+
 [[example]]
 name = "mel_probe"
+required-features = ["ort"]
+
+[[example]]
+name = "swiftf0_probe"
 required-features = ["ort"]

@@ -48,8 +48,7 @@ fn main() {
 
     if let Some(model) = model {
         // The model path on the 16 kHz signal directly (native grid).
-        let estimator =
-            kirafrq_ml_provider::rmvpe::Rmvpe::new(model.into(), UvPolicy::rmvpe(None), 1);
+        let estimator = kirafrq_ml_provider::rmvpe::Rmvpe::new(model, UvPolicy::rmvpe(None), 1);
         let native = estimator.native_estimate(&audio).expect("native estimate");
         writeln!(file, "native_len {}", native.len()).unwrap();
         for (index, &value) in native.iter().enumerate() {
