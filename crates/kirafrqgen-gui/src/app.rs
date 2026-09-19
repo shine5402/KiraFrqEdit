@@ -195,6 +195,11 @@ pub struct KiraFrqGenApp {
     /// (#32); an unavailable clipboard disables its Paste item.
     clipboard: PathClipboard,
 
+    /// The Help > Credits window: whether it is open and whether it shows the
+    /// full license texts (the default).
+    credits_open: bool,
+    credits_full: bool,
+
     run: Option<RunSession>,
 }
 
@@ -226,6 +231,8 @@ impl KiraFrqGenApp {
             expanded: HashSet::new(),
             selected: BTreeSet::new(),
             clipboard: PathClipboard::default(),
+            credits_open: false,
+            credits_full: true,
             run: None,
         }
     }
@@ -336,6 +343,37 @@ impl KiraFrqGenApp {
         }
     }
 
+    /// The Help > Credits window: a read-only, scrollable, selectable view of
+    /// `CREDITS.md`, the same text `kirafrqgen-cli --license` prints.
+    fn credits_window(&mut self, ctx: &egui::Context) {
+        if !self.credits_open {
+            return;
+        }
+        let mut open = self.credits_open;
+        egui::Window::new("Credits")
+            .open(&mut open)
+            .default_size([640.0, 480.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.checkbox(&mut self.credits_full, "Show full license texts");
+                let credits = if self.credits_full {
+                    kirafrq_credits::full()
+                } else {
+                    kirafrq_credits::summary()
+                };
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(RichText::new(credits).monospace())
+                                .selectable(true)
+                                .wrap(),
+                        );
+                    });
+            });
+        self.credits_open = open;
+    }
+
     /// Hand the selected wavs to the real pipeline on a worker thread.
     fn start_run(&mut self, ctx: &egui::Context) {
         let Some(tree) = &self.tree else {
@@ -382,8 +420,26 @@ impl KiraFrqGenApp {
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         let running = self.is_running();
+        let mut open_credits = false;
         ui.add_space(10.0);
-        ui.label(RichText::new("KiraFrqGen").size(22.0).strong());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("KiraFrqGen").size(22.0).strong());
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.menu_button(icons::LIST, |ui| {
+                    ui.menu_button("Help", |ui| {
+                        if ui.button("Credits").clicked() {
+                            ui.close();
+                            open_credits = true;
+                        }
+                    });
+                })
+                .response
+                .on_hover_text("Help");
+            });
+        });
+        if open_credits {
+            self.credits_open = true;
+        }
         ui.weak("Bulk-generate frq tables for your UTAU voicebank.");
         ui.add_space(10.0);
         ui.separator();
@@ -908,6 +964,7 @@ impl eframe::App for KiraFrqGenApp {
         if hovering {
             self.overlay(ui.ctx());
         }
+        self.credits_window(ui.ctx());
         if self.is_running() {
             ui.ctx().request_repaint();
         }

@@ -19,6 +19,19 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> u8 {
+    if cli.license || cli.license_full {
+        let credits = if cli.license_full {
+            kirafrq_credits::full()
+        } else {
+            kirafrq_credits::summary()
+        };
+        print!("{credits}");
+        return 0;
+    }
+    let path = cli
+        .path
+        .clone()
+        .expect("clap requires PATH unless a license flag was given");
     let verbosity = if cli.quiet {
         Verbosity::Quiet
     } else if cli.verbose {
@@ -41,7 +54,7 @@ fn run(cli: Cli) -> u8 {
 
     let mut config_warnings = Vec::new();
     let mut opts = GenerateOptions {
-        root: cli.path.clone(),
+        root: path,
         targets: targets.clone(),
         overwrite: cli.overwrite,
         f0: cli.f0_config(),

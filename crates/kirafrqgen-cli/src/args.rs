@@ -14,9 +14,10 @@ use kirafrqgen_core::{Estimator, F0Config, Target};
     about = "Bulk-generate frq tables for your UTAU voicebank."
 )]
 pub struct Cli {
-    /// A voicebank folder (recursive scan) or a single .wav file.
-    #[arg(value_name = "PATH")]
-    pub path: PathBuf,
+    /// A voicebank folder (recursive scan) or a single .wav file. Not needed
+    /// with `--license` or `--license-full`.
+    #[arg(value_name = "PATH", required_unless_present_any = ["license", "license_full"])]
+    pub path: Option<PathBuf>,
 
     /// Table formats to write: frq, pmk, mrq (comma-separated, repeatable).
     #[arg(long, value_delimiter = ',', value_name = "FORMAT")]
@@ -72,6 +73,14 @@ pub struct Cli {
     /// Show live run progress on stderr (TTY only).
     #[arg(long)]
     pub progress: bool,
+
+    /// Print the project credits and the Rust dependency notices, then exit.
+    #[arg(long, conflicts_with = "license_full")]
+    pub license: bool,
+
+    /// Like `--license`, but with the full text of every dependency license.
+    #[arg(long)]
+    pub license_full: bool,
 }
 
 impl Cli {
@@ -352,9 +361,40 @@ mod tests {
     }
 
     #[test]
-    fn a_double_dash_lets_a_path_that_looks_like_a_flag_through() {
+    fn a_double_dash_lets_a_path_that_looks_like_a_flag() {
         let cli = parse_ok(&["--", "--weird.wav"]);
-        assert_eq!(cli.path, PathBuf::from("--weird.wav"));
+        assert_eq!(cli.path, Some(PathBuf::from("--weird.wav")));
+    }
+
+    #[test]
+    fn a_license_flag_needs_no_path() {
+        let cli = parse_ok(&["--license"]);
+        assert!(cli.license);
+        assert!(!cli.license_full);
+        assert_eq!(cli.path, None);
+
+        let cli = parse_ok(&["--license-full"]);
+        assert!(cli.license_full);
+        assert!(!cli.license);
+        assert_eq!(cli.path, None);
+    }
+
+    #[test]
+    fn a_path_with_a_license_flag_is_still_parsed() {
+        let cli = parse_ok(&["bank", "--license"]);
+        assert_eq!(cli.path, Some(PathBuf::from("bank")));
+        assert!(cli.license);
+    }
+
+    #[test]
+    fn the_license_flags_are_mutually_exclusive() {
+        let error = parse(&["--license", "--license-full"]).unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+    }
+
+    #[test]
+    fn without_a_path_or_a_license_flag_the_path_is_required() {
+        assert_eq!(parse(&[]).unwrap_err().exit_code(), 2);
     }
 
     #[test]
