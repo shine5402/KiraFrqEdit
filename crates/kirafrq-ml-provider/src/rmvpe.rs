@@ -30,7 +30,7 @@ const DECODER_HALF_WINDOW: usize = 4;
 const PROGRESS_TICKS: usize = 4;
 
 /// The RMVPE estimator. The ONNX Runtime session is a process-wide,
-/// lazily-built singleton ([`session`]) so every run in one process reuses
+/// lazily-built singleton behind a mutex, so every run in one process reuses
 /// the loaded model.
 pub struct Rmvpe {
     model_path: PathBuf,
