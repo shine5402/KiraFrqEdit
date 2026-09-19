@@ -154,7 +154,6 @@ mod tests {
         assert_eq!(SWIFTF0_CONTRACT.sample_rate, 16_000);
         assert_eq!(SWIFTF0_CONTRACT.hop_samples, 256);
         approx(SWIFTF0_CONTRACT.frame_period_s(), 0.016);
-        // Native frame k sits at (127.5 + k * 256) / 16000 s (#59).
         for frame in 0..4 {
             approx(
                 SWIFTF0_CONTRACT.frame_time_s(frame),

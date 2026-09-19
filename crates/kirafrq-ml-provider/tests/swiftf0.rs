@@ -16,8 +16,7 @@ use kirafrq_ml_provider::model::ModelSource;
 use kirafrq_ml_provider::policy::UvPolicy;
 use kirafrq_ml_provider::swiftf0::{BUNDLED_MODEL, SwiftF0};
 
-/// The SHA-256 of the bundled model, pinned to the upstream commit
-/// `64700fce8ef39c2970814bf427ac1d75a2f20d72` (#59).
+/// [`BUNDLED_MODEL`]'s SHA-256, pinned in #59.
 const PINNED_SHA256: &str = "7e2390db8379cd9e1e2b22828e55b45b57c8559e4c8335678c717dc245c18176";
 
 fn bundled() -> SwiftF0 {

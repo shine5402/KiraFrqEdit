@@ -1941,6 +1941,7 @@ dependencies = [
 name = "kirafrq-ml-provider"
 version = "0.1.0"
 dependencies = [
+ "kirafrq-audio",
  "ort",
  "realfft",
  "rubato",

@@ -38,8 +38,8 @@ pub(crate) fn with<R>(
     f(&mut cached.session)
 }
 
-/// Build the session: static ONNX Runtime, graph optimization at the default
-/// level, `inter_op = 1`, `jobs` into the intra-op pool. An on-disk model is
+/// Build the session: static ONNX Runtime, `Level3` graph optimization,
+/// `inter_op = 1`, `jobs` into the intra-op pool. An on-disk model is
 /// committed from its path; a bundled model from its bytes in memory.
 fn build(source: &ModelSource, jobs: usize) -> Result<Cached, Error> {
     let mut builder = Session::builder().map_err(ort_error)?;

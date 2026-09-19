@@ -49,7 +49,7 @@ impl Estimator {
     }
 
     /// The user-facing one-liner the front ends show for this estimator
-    /// (wording fixed in #49, revised in #71).
+    /// (wording fixed in #49).
     pub fn description(self) -> &'static str {
         match self {
             Estimator::Dio => {
@@ -112,8 +112,8 @@ pub struct F0Config {
     /// kept out of the headline API.
     #[doc(hidden)]
     pub aperiodicity_gate_threshold: f64,
-    /// The ML estimator's model and threshold (#48/#53); consulted only when
-    /// [`Estimator::Rmvpe`] is selected.
+    /// The ML estimators' model and threshold (#48/#53); consulted only when
+    /// [`Estimator::Rmvpe`] or [`Estimator::SwiftF0`] is selected.
     pub ml: MlConfig,
 }
 
@@ -216,12 +216,8 @@ impl F0Estimator for WorldEstimator {
             // is built.
             Estimator::Rmvpe | Estimator::SwiftF0 => {
                 return Err(GeneratorError::Config(format!(
-                    "{} is not a WORLD estimator",
-                    match self.config.estimator {
-                        Estimator::Rmvpe => "RMVPE",
-                        Estimator::SwiftF0 => "SwiftF0",
-                        _ => unreachable!("the WORLD arms returned above"),
-                    }
+                    "the {:?} ML estimator is not a WORLD estimator",
+                    self.config.estimator
                 )));
             }
         };
@@ -355,10 +351,10 @@ impl kirafrq_ml_provider::ProgressObserver for MlProgress<'_> {
     }
 }
 
-/// Build the estimator for `config`, resolving the ML model file up front
-/// (#48/#49): selecting RMVPE without the `ml` feature or without a model
-/// file is an early [`GeneratorError::Config`] naming the expected file, the
-/// lookup directories and a download hint.
+/// Build the estimator for `config`, resolving the ML model up front
+/// (#48/#49/#69): selecting an ML estimator without the `ml` feature, without
+/// a resolvable RMVPE file, or with a missing explicit model is an early
+/// [`GeneratorError::Config`], not a per-file failure.
 ///
 /// `jobs` is the run's single "cores" knob ([`GenerateOptions::jobs`]); the
 /// ML session maps it onto ONNX Runtime's intra-op threads.
@@ -370,6 +366,24 @@ pub fn build_estimator(
         Estimator::Dio | Estimator::Harvest => Ok(Box::new(WorldEstimator::new(config.clone()))),
         Estimator::Rmvpe => build_ml_estimator(config, jobs),
         Estimator::SwiftF0 => build_swiftf0_estimator(config, jobs),
+    }
+}
+
+/// An explicit `model_path` override that exists, else `None` so the caller
+/// resolves by filename. A set-but-missing path is an early config error
+/// naming the estimator.
+#[cfg(feature = "ml")]
+fn explicit_model_path(
+    config: &F0Config,
+    estimator: &str,
+) -> Result<Option<PathBuf>, GeneratorError> {
+    match &config.ml.model_path {
+        Some(path) if !path.is_file() => Err(GeneratorError::Config(format!(
+            "the {estimator} model file {} does not exist",
+            path.display()
+        ))),
+        Some(path) => Ok(Some(path.clone())),
+        None => Ok(None),
     }
 }
 
@@ -389,16 +403,8 @@ fn build_ml_estimator(
     config: &F0Config,
     jobs: usize,
 ) -> Result<Box<dyn F0Estimator>, GeneratorError> {
-    let model_path = match &config.ml.model_path {
-        Some(path) => {
-            if !path.is_file() {
-                return Err(GeneratorError::Config(format!(
-                    "the ML model file {} does not exist",
-                    path.display()
-                )));
-            }
-            path.clone()
-        }
+    let model_path = match explicit_model_path(config, "ML")? {
+        Some(path) => path,
         None => kirafrq_ml_provider::resolve_model()
             .map_err(|error| GeneratorError::Config(format!("{error}; {ML_DOWNLOAD_HINT}")))?,
     };
@@ -423,16 +429,8 @@ fn build_swiftf0_estimator(
     config: &F0Config,
     jobs: usize,
 ) -> Result<Box<dyn F0Estimator>, GeneratorError> {
-    let source = match &config.ml.model_path {
-        Some(path) => {
-            if !path.is_file() {
-                return Err(GeneratorError::Config(format!(
-                    "the SwiftF0 model file {} does not exist",
-                    path.display()
-                )));
-            }
-            kirafrq_ml_provider::ModelSource::File(path.clone())
-        }
+    let source = match explicit_model_path(config, "SwiftF0")? {
+        Some(path) => kirafrq_ml_provider::ModelSource::File(path),
         None => kirafrq_ml_provider::swiftf0::resolve_source(),
     };
     let policy = ml_policy(
@@ -451,10 +449,7 @@ fn build_ml_estimator(
     _config: &F0Config,
     _jobs: usize,
 ) -> Result<Box<dyn F0Estimator>, GeneratorError> {
-    Err(GeneratorError::Config(format!(
-        "this build has no ML estimator support (compiled without the `ml` feature); \
-         {ML_DOWNLOAD_HINT}"
-    )))
+    Err(no_ml_support())
 }
 
 #[cfg(not(feature = "ml"))]
@@ -462,10 +457,14 @@ fn build_swiftf0_estimator(
     _config: &F0Config,
     _jobs: usize,
 ) -> Result<Box<dyn F0Estimator>, GeneratorError> {
-    Err(GeneratorError::Config(format!(
-        "this build has no ML estimator support (compiled without the `ml` feature); \
-         {ML_DOWNLOAD_HINT}"
-    )))
+    Err(no_ml_support())
+}
+
+#[cfg(not(feature = "ml"))]
+fn no_ml_support() -> GeneratorError {
+    GeneratorError::Config(
+        "this build has no ML estimator support (compiled without the `ml` feature)".to_string(),
+    )
 }
 
 /// The download hint the CLI and GUI share for an unavailable ML model (#48).

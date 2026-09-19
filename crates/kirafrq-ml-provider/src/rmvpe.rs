@@ -1,6 +1,5 @@
 //! RMVPE over ONNX Runtime: the salience decoder, the #53 policy wiring and
-//! the lazily-built session. Every `ort` call in the workspace lives in the
-//! model modules.
+//! the lazily-built session.
 //!
 //! Contract (verified against `rvc/lib/rmvpe.py`, `pitch-core-onnx::rmvpe`
 //! and the local `rmvpe.onnx` in #36/#38):

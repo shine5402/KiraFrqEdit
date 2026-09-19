@@ -10,6 +10,9 @@
 //! - output: `pitch_hz` and `confidence`, one value per native frame.
 //! - native frame `k` sits at `(127.5 + k*256) / 16000` s
 //!   ([`crate::grid::SWIFTF0_CONTRACT`]).
+//!
+//! The `native_*` methods expose the model's own grid for local verification
+//! against the Python `swift_f0` reference; they are not a pipeline surface.
 
 use ort::value::Tensor;
 
@@ -36,6 +39,17 @@ const PROGRESS_TICKS: usize = 4;
 /// The output tensor names the graph emits.
 const PITCH_OUTPUT: &str = "pitch_hz";
 const CONFIDENCE_OUTPUT: &str = "confidence";
+
+/// Validate that an output tensor's shape is `[1, frames]`, returning
+/// `frames`.
+fn validate_output_shape(name: &str, shape: &[i64]) -> Result<usize, Error> {
+    match shape {
+        [1, frames] => Ok(*frames as usize),
+        _ => Err(Error::Ort(format!(
+            "SwiftF0 `{name}` shape {shape:?} is not [1, frames]"
+        ))),
+    }
+}
 
 /// Resolve SwiftF0's model: the on-disk `swiftf0.onnx` (executable directory,
 /// then `KIRAFRQ_ML_DIR`) if present, else the bundled bytes.
@@ -120,16 +134,14 @@ impl SwiftF0 {
     }
 
     /// The policy-applied f0 on the model's native grid, for local
-    /// verification probes against the Python `swift_f0` reference. Not part
-    /// of the pipeline surface.
+    /// verification probes.
     #[doc(hidden)]
     pub fn native_estimate(&self, audio_16k: &[f32]) -> Result<Vec<f64>, Error> {
         self.infer(audio_16k)
     }
 
     /// The raw `pitch_hz` and `confidence` the graph emits on the native grid,
-    /// with the mandatory zero-pad applied, before the #53 policy. For the
-    /// local Python parity probe; not part of the pipeline surface.
+    /// with the mandatory zero-pad applied, before the #53 policy.
     #[doc(hidden)]
     pub fn native_outputs(&self, audio_16k: &[f32]) -> Result<(Vec<f32>, Vec<f32>), Error> {
         let mut audio = audio_16k.to_vec();
@@ -165,20 +177,15 @@ impl SwiftF0 {
                     ))
                 })?;
 
-            let shape: Vec<usize> = pitch_shape.iter().map(|&dim| dim as usize).collect();
-            if shape.len() != 2 || shape[0] != 1 {
-                return Err(Error::Ort(format!(
-                    "SwiftF0 `{PITCH_OUTPUT}` shape {shape:?} is not [1, frames]"
-                )));
-            }
-            if pitch.len() != confidence.len() {
+            let frames = validate_output_shape(PITCH_OUTPUT, pitch_shape)?;
+            validate_output_shape(CONFIDENCE_OUTPUT, confidence_shape)?;
+            if pitch.len() != confidence.len() || confidence.len() != frames {
                 return Err(Error::Ort(format!(
                     "SwiftF0 pitch/confidence length mismatch: {} vs {}",
                     pitch.len(),
                     confidence.len()
                 )));
             }
-            let _ = confidence_shape;
             Ok((pitch.to_vec(), confidence.to_vec()))
         })
     }

@@ -95,20 +95,8 @@ impl From<PathBuf> for ModelSource {
     }
 }
 
-impl From<&Path> for ModelSource {
-    fn from(path: &Path) -> Self {
-        ModelSource::File(path.to_path_buf())
-    }
-}
-
 impl From<String> for ModelSource {
     fn from(path: String) -> Self {
-        ModelSource::File(PathBuf::from(path))
-    }
-}
-
-impl From<&str> for ModelSource {
-    fn from(path: &str) -> Self {
         ModelSource::File(PathBuf::from(path))
     }
 }

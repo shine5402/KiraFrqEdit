@@ -1210,8 +1210,6 @@ fn an_unloadable_ml_model_is_an_early_config_error() {
 
 #[test]
 fn selecting_swiftf0_resolves_the_bundled_model_or_reports_the_missing_feature() {
-    // #69: in an ML build SwiftF0 always resolves (bundled), so the factory
-    // succeeds with no explicit model; the compat build rejects it.
     let config = kirafrqgen_core::F0Config {
         estimator: kirafrqgen_core::Estimator::SwiftF0,
         ..kirafrqgen_core::F0Config::default()
