@@ -4,6 +4,7 @@ members = [
     "crates/kirafrq-formats",
     "crates/kirafrq-audio",
     "crates/kirafrq-world-binding",
+    "crates/kirafrq-ml-provider",
     "crates/kirafrqgen-core",
     "crates/kirafrqgen-cli",
     "crates/kirafrqgen-gui",
@@ -20,6 +21,16 @@ repository = "https://github.com/shine5402/KiraFrqEdit"
 hound = "=3.5.1"
 rubato = "=5.0.0"
 cc = "=1.4.6"
+# RMVPE's log-mel frontend (#57); pairs with the ort pin below.
+realfft = "=3.5.0"
+# ML provider (#48): ONNX Runtime, statically linked; rustls TLS for the
+# build-time archive download (no copy-dylibs, no dylib lookup). Exact pin.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "download-binaries",
+    "tls-rustls",
+    "api-27",
+] }
 
 # The mrq sharing flag's local-code-page conversion (#16); WHATWG Shift_JIS and
 # GBK cover the corpus-relevant code pages.
@@ -40,4 +51,5 @@ arboard = { version = "3", default-features = false }
 kirafrq-formats = { path = "crates/kirafrq-formats" }
 kirafrq-audio = { path = "crates/kirafrq-audio" }
 kirafrq-world-binding = { path = "crates/kirafrq-world-binding" }
-kirafrqgen-core = { path = "crates/kirafrqgen-core" }
+kirafrq-ml-provider = { path = "crates/kirafrq-ml-provider" }
+kirafrqgen-core = { path = "crates/kirafrqgen-core", default-features = false }

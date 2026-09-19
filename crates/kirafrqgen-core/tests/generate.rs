@@ -136,6 +136,8 @@ struct FakeEstimator {
     refine_factor: f64,
     /// Sets the token when the n-th estimate (1-based) runs.
     cancel_on_call: Option<(usize, CancelToken)>,
+    /// Whether this estimator advertises StoneMask support (#48).
+    stone_mask: bool,
 }
 
 impl FakeEstimator {
@@ -146,6 +148,7 @@ impl FakeEstimator {
             refined: AtomicUsize::new(0),
             refine_factor: 1.0,
             cancel_on_call: None,
+            stone_mask: true,
         }
     }
 
@@ -203,6 +206,10 @@ impl F0Estimator for FakeEstimator {
             }
         }
         Ok(())
+    }
+
+    fn supports_stonemask(&self) -> bool {
+        self.stone_mask
     }
 }
 
@@ -973,6 +980,202 @@ fn stone_mask_refinement_is_wired_to_the_config() {
     assert_eq!(table.f0_hz, [100.0, 200.0, 0.0, 0.0]);
 }
 
+#[test]
+fn an_estimator_without_stonemask_is_never_refined_even_with_the_flag_on() {
+    let scratch = Scratch::new("stonemask-capability");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);
+
+    let mut estimator = FakeEstimator::new(&[100.0, 200.0, 0.0, 400.0]);
+    estimator.refine_factor = 2.0;
+    estimator.stone_mask = false;
+
+    let opts = options(&scratch.0, &[Target::Frq]);
+    assert!(opts.f0.stone_mask, "the flag is on; the capability decides");
+    run(&opts, &estimator);
+
+    assert_eq!(
+        estimator.refined_count(),
+        0,
+        "an estimator without StoneMask never refines (#48)"
+    );
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz, [100.0, 200.0, 0.0, 0.0]);
+}
+
+#[test]
+fn the_energy_gate_is_world_only() {
+    // #53: the WORLD energy gate is a WORLD workaround; an ML estimator's
+    // voicing policy must survive `world_quirks` untouched.
+    let scratch = Scratch::new("ml-no-energy-gate");
+    write_wav(&scratch, "A2.wav", mono(), &gated_samples());
+    let estimator = FakeEstimator::new(&[110.0, 220.0, 330.0, 440.0, 550.0]);
+
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.estimator = kirafrqgen_core::Estimator::Rmvpe;
+    assert!(opts.f0.world_quirks, "the default is the tuned path");
+    run(&opts, &estimator);
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(
+        table.f0_hz,
+        [110.0, 220.0, 330.0, 440.0, 0.0],
+        "no energy gate on the ML path"
+    );
+}
+
+// --- ML estimator factory (#48/#49) -----------------------------------------
+
+#[test]
+fn the_factory_builds_the_world_pair() {
+    let config = kirafrqgen_core::F0Config {
+        estimator: kirafrqgen_core::Estimator::Dio,
+        ..kirafrqgen_core::F0Config::default()
+    };
+    let estimator = kirafrqgen_core::build_estimator(&config, 1).unwrap();
+    assert!(estimator.supports_stonemask(), "WORLD refines");
+
+    let config = kirafrqgen_core::F0Config {
+        estimator: kirafrqgen_core::Estimator::Harvest,
+        ..kirafrqgen_core::F0Config::default()
+    };
+    let estimator = kirafrqgen_core::build_estimator(&config, 1).unwrap();
+    assert!(estimator.supports_stonemask(), "WORLD refines");
+}
+
+#[test]
+fn selecting_rmvpe_without_a_model_is_an_early_config_error() {
+    let config = kirafrqgen_core::F0Config {
+        estimator: kirafrqgen_core::Estimator::Rmvpe,
+        ml: kirafrqgen_core::MlConfig {
+            model_path: Some(PathBuf::from("definitely-not-a-model.onnx")),
+            confidence_threshold: None,
+        },
+        ..kirafrqgen_core::F0Config::default()
+    };
+    match kirafrqgen_core::build_estimator(&config, 1) {
+        Err(GeneratorError::Config(message)) => {
+            // With `ml` on the error names the path; the compat build reports
+            // the missing feature. Both are early config errors (#48).
+            if kirafrqgen_core::ML_SUPPORTED {
+                assert!(message.contains("definitely-not-a-model.onnx"), "{message}");
+            } else {
+                assert!(message.contains("no ML estimator support"), "{message}");
+            }
+        }
+        Err(other) => panic!("expected a config error, got {other}"),
+        Ok(_) => panic!("expected a config error, got an estimator"),
+    }
+}
+
+#[test]
+fn the_ml_capability_predicates_are_consistent() {
+    // `ml_available` must never claim availability in a build without the
+    // feature, and a model path is existence-checked.
+    let config = kirafrqgen_core::F0Config::default();
+    if !kirafrqgen_core::ML_SUPPORTED {
+        assert!(!kirafrqgen_core::ml_available(&config));
+    }
+    let missing = kirafrqgen_core::F0Config {
+        ml: kirafrqgen_core::MlConfig {
+            model_path: Some(PathBuf::from("no-such-model.onnx")),
+            confidence_threshold: None,
+        },
+        ..kirafrqgen_core::F0Config::default()
+    };
+    assert!(!kirafrqgen_core::ml_available(&missing));
+}
+
+/// The committed tiny ONNX fixture (`rmvpe_tiny.onnx`) with RMVPE's I/O
+/// contract, for the ML end-to-end tests; no real model in CI.
+#[cfg(feature = "ml")]
+fn ml_fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("kirafrq-ml-provider")
+        .join("tests")
+        .join("fixtures")
+        .join("rmvpe_tiny.onnx")
+}
+
+#[cfg(feature = "ml")]
+#[test]
+fn an_ml_confidence_override_above_every_peak_unvoices_the_whole_file() {
+    // #53 criterion 4 end to end: all peaks are below the threshold, so the
+    // table is all-unvoiced and its key is `0.0`.
+    let scratch = Scratch::new("ml-all-unvoiced");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1024]);
+
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.estimator = kirafrqgen_core::Estimator::Rmvpe;
+    opts.f0.ml = kirafrqgen_core::MlConfig {
+        model_path: Some(ml_fixture()),
+        confidence_threshold: Some(2.0),
+    };
+    let estimator = kirafrqgen_core::build_estimator(&opts.f0, 1).unwrap();
+    run(&opts, estimator.as_ref());
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz, vec![0.0; 5], "all-unvoiced");
+    assert_eq!(table.key_hz, 0.0);
+}
+
+#[cfg(feature = "ml")]
+#[test]
+fn the_ml_fixture_writes_a_conforming_table() {
+    // The factory + pipeline path with the fixture: the #8 conventions hold
+    // and the fixture's ~441.5 Hz slot reaches the table.
+    let scratch = Scratch::new("ml-fixture");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1024]);
+
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.estimator = kirafrqgen_core::Estimator::Rmvpe;
+    opts.f0.ml = kirafrqgen_core::MlConfig {
+        model_path: Some(ml_fixture()),
+        confidence_threshold: None,
+    };
+    let estimator = kirafrqgen_core::build_estimator(&opts.f0, 1).unwrap();
+    assert!(!estimator.supports_stonemask(), "ML never refines");
+    run(&opts, estimator.as_ref());
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz.len(), 5);
+    assert_eq!(*table.f0_hz.last().unwrap(), 0.0, "the trailing rule");
+    let voiced: Vec<f64> = table
+        .f0_hz
+        .iter()
+        .copied()
+        .filter(|&value| value > 0.0)
+        .collect();
+    assert!(!voiced.is_empty(), "{:?}", table.f0_hz);
+    assert!(
+        voiced.iter().any(|&value| (400.0..500.0).contains(&value)),
+        "the fixture's ~441.5 Hz slot: {voiced:?}"
+    );
+}
+
+#[cfg(feature = "ml")]
+#[test]
+fn an_unloadable_ml_model_is_an_early_config_error() {
+    // #49: a model file that exists but cannot be loaded fails at the factory,
+    // before any file is touched.
+    let scratch = Scratch::new("ml-unloadable");
+    let broken = scratch.join("broken.onnx");
+    fs::write(&broken, b"not an onnx graph").unwrap();
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.estimator = kirafrqgen_core::Estimator::Rmvpe;
+    opts.f0.ml = kirafrqgen_core::MlConfig {
+        model_path: Some(broken),
+        confidence_threshold: None,
+    };
+    match kirafrqgen_core::build_estimator(&opts.f0, 1) {
+        Err(GeneratorError::Config(message)) => {
+            assert!(message.contains("broken.onnx"), "{message}");
+        }
+        Err(other) => panic!("expected a config error, got {other}"),
+        Ok(_) => panic!("expected a config error, got an estimator"),
+    }
+}
+
 // --- energy voicing gate (#54) ----------------------------------------------
 
 /// 1024 samples: loud, i16 33, loud, loud, empty — frq amplitudes
@@ -1100,7 +1303,17 @@ use kirafrq_world_binding::{FrameObserver, ProgressStage};
 
 /// Fake estimator that plays a scripted (stage, done, total) sequence through
 /// the observer instead of analyzing anything.
-struct ScriptedEstimator;
+struct ScriptedEstimator {
+    /// Whether it advertises StoneMask support; when false, the pipeline never
+    /// gives the refine phase a share and the analysis stays the estimate's.
+    stone_mask: bool,
+}
+
+impl ScriptedEstimator {
+    fn new() -> Self {
+        Self { stone_mask: true }
+    }
+}
 
 impl F0Estimator for ScriptedEstimator {
     fn estimate(
@@ -1139,6 +1352,10 @@ impl F0Estimator for ScriptedEstimator {
         }
         Ok(())
     }
+
+    fn supports_stonemask(&self) -> bool {
+        self.stone_mask
+    }
 }
 
 #[derive(Default)]
@@ -1167,7 +1384,7 @@ fn file_progress_composes_estimate_and_refine_into_one_permille() {
     opts.f0.stone_mask = true;
     let progress = ProgressTape::default();
     let cancel: CancelToken = Arc::new(AtomicBool::new(false));
-    generate(&opts, &ScriptedEstimator, &progress, &cancel).unwrap();
+    generate(&opts, &ScriptedEstimator::new(), &progress, &cancel).unwrap();
 
     let events = progress.events.lock().unwrap();
     let fractions: Vec<u64> = events
@@ -1190,7 +1407,7 @@ fn file_progress_without_stonemask_gives_estimate_the_whole_analysis() {
     opts.f0.stone_mask = false;
     let progress = ProgressTape::default();
     let cancel: CancelToken = Arc::new(AtomicBool::new(false));
-    generate(&opts, &ScriptedEstimator, &progress, &cancel).unwrap();
+    generate(&opts, &ScriptedEstimator::new(), &progress, &cancel).unwrap();
 
     let events = progress.events.lock().unwrap();
     let fractions: Vec<u64> = events
@@ -1208,7 +1425,7 @@ fn file_progress_splits_the_write_share_across_targets() {
     let opts = options(&scratch.0, &[Target::Frq, Target::Pmk]);
     let progress = ProgressTape::default();
     let cancel: CancelToken = Arc::new(AtomicBool::new(false));
-    generate(&opts, &ScriptedEstimator, &progress, &cancel).unwrap();
+    generate(&opts, &ScriptedEstimator::new(), &progress, &cancel).unwrap();
 
     let events = progress.events.lock().unwrap();
     let fractions: Vec<u64> = events
@@ -1231,7 +1448,7 @@ fn file_progress_credits_a_deferred_mrq_share_at_the_folder_merge() {
     let opts = options(&scratch.0, &[Target::Frq, Target::Mrq]);
     let progress = ProgressTape::default();
     let cancel: CancelToken = Arc::new(AtomicBool::new(false));
-    generate(&opts, &ScriptedEstimator, &progress, &cancel).unwrap();
+    generate(&opts, &ScriptedEstimator::new(), &progress, &cancel).unwrap();
 
     let events = progress.events.lock().unwrap();
     let fractions: Vec<u64> = events

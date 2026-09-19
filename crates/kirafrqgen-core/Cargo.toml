@@ -5,10 +5,18 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+# The ML estimator tier (#48): pulls the provider and its ONNX Runtime path.
+# The binaries own `default = ["ml"]`; a `--no-default-features` build of this
+# crate is the compat variant, with no ML option at all.
+ml = ["dep:kirafrq-ml-provider", "kirafrq-ml-provider/ort"]
+
 [dependencies]
 kirafrq-audio.workspace = true
 kirafrq-formats.workspace = true
 kirafrq-world-binding.workspace = true
+kirafrq-ml-provider = { workspace = true, optional = true }
 rayon.workspace = true
 
 [dev-dependencies]

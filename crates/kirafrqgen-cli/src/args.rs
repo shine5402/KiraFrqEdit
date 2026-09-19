@@ -22,9 +22,14 @@ pub struct Cli {
     #[arg(long, value_delimiter = ',', value_name = "FORMAT")]
     pub format: Vec<FormatArg>,
 
-    /// f0 estimator for every wav.
-    #[arg(long, value_enum, default_value_t = EstimatorArg::Harvest)]
-    pub estimator: EstimatorArg,
+    /// f0 estimator for every wav. Defaults to the ML estimator when this
+    /// build has ML support and a model file is present, else dio.
+    #[arg(long, value_enum)]
+    pub estimator: Option<EstimatorArg>,
+
+    /// Disable the tuned WORLD path (the energy voicing gate); WORLD only.
+    #[arg(long)]
+    pub no_world_quirks: bool,
 
     /// Regenerate tables that already exist.
     #[arg(long)]
@@ -77,12 +82,24 @@ impl Cli {
         targets
     }
 
-    /// The standing f0 defaults (#7/#8) with the chosen estimator.
+    /// The standing f0 defaults (#7/#8) with the resolved estimator and the
+    /// WORLD-quirks toggle (#49).
     pub fn f0_config(&self) -> F0Config {
         F0Config {
-            estimator: self.estimator.into(),
+            estimator: self.estimator(),
+            world_quirks: !self.no_world_quirks,
             ..F0Config::default()
         }
+    }
+
+    /// The capability-aware default (#49): RMVPE when the build has ML and a
+    /// model file resolves, else DIO. An explicit `--estimator` always wins.
+    pub fn estimator(&self) -> Estimator {
+        if let Some(explicit) = self.estimator {
+            return explicit.into();
+        }
+        let default = F0Config::default();
+        kirafrqgen_core::default_estimator(kirafrqgen_core::ml_available(&default))
     }
 
     /// The explicit `.llsm` flags as a value; `None` when neither was passed,
@@ -115,17 +132,46 @@ impl From<FormatArg> for Target {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// The `--estimator` value: the WORLD pair always, RMVPE only in an
+/// ML-enabled build (#48: the compat build has no ML option).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EstimatorArg {
-    Harvest,
     Dio,
+    Harvest,
+    #[cfg(feature = "ml")]
+    Rmvpe,
+}
+
+impl clap::ValueEnum for EstimatorArg {
+    fn value_variants<'a>() -> &'a [Self] {
+        #[cfg(feature = "ml")]
+        {
+            &[Self::Dio, Self::Harvest, Self::Rmvpe]
+        }
+        #[cfg(not(feature = "ml"))]
+        {
+            &[Self::Dio, Self::Harvest]
+        }
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        let name = match self {
+            EstimatorArg::Dio => "dio",
+            EstimatorArg::Harvest => "harvest",
+            #[cfg(feature = "ml")]
+            EstimatorArg::Rmvpe => "rmvpe",
+        };
+        Some(clap::builder::PossibleValue::new(name).help(Estimator::from(*self).description()))
+    }
 }
 
 impl From<EstimatorArg> for Estimator {
     fn from(value: EstimatorArg) -> Self {
         match value {
-            EstimatorArg::Harvest => Estimator::Harvest,
             EstimatorArg::Dio => Estimator::Dio,
+            EstimatorArg::Harvest => Estimator::Harvest,
+            #[cfg(feature = "ml")]
+            EstimatorArg::Rmvpe => Estimator::Rmvpe,
         }
     }
 }
@@ -199,14 +245,68 @@ mod tests {
     }
 
     #[test]
-    fn estimator_defaults_to_harvest_with_dio_opt_in() {
-        assert_eq!(parse_ok(&["bank"]).estimator, EstimatorArg::Harvest);
+    fn estimator_is_unset_by_default_and_accepts_every_name() {
+        assert_eq!(parse_ok(&["bank"]).estimator, None);
         assert_eq!(
             parse_ok(&["bank", "--estimator", "dio"]).estimator,
-            EstimatorArg::Dio
+            Some(EstimatorArg::Dio)
+        );
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "harvest"]).estimator,
+            Some(EstimatorArg::Harvest)
+        );
+        #[cfg(feature = "ml")]
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "rmvpe"]).estimator,
+            Some(EstimatorArg::Rmvpe)
         );
         let error = parse(&["bank", "--estimator", "swipe"]).unwrap_err();
         assert_eq!(error.exit_code(), 2);
+    }
+
+    #[test]
+    fn the_compat_build_rejects_rmvpe_as_a_usage_error() {
+        // #48: the compat build has no ML option at all.
+        #[cfg(not(feature = "ml"))]
+        {
+            let error = parse(&["bank", "--estimator", "rmvpe"]).unwrap_err();
+            assert_eq!(error.exit_code(), 2);
+        }
+        #[cfg(feature = "ml")]
+        {
+            assert!(
+                parse_ok(&["bank", "--estimator", "rmvpe"])
+                    .estimator
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn an_explicit_estimator_always_wins_over_the_default() {
+        #[cfg(feature = "ml")]
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "rmvpe"]).estimator(),
+            Estimator::Rmvpe
+        );
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "harvest"]).estimator(),
+            Estimator::Harvest
+        );
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "dio"]).estimator(),
+            Estimator::Dio
+        );
+    }
+
+    #[test]
+    fn world_quirks_default_on_and_no_world_quirks_turns_them_off() {
+        assert!(parse_ok(&["bank"]).f0_config().world_quirks);
+        assert!(
+            !parse_ok(&["bank", "--no-world-quirks"])
+                .f0_config()
+                .world_quirks
+        );
     }
 
     #[test]

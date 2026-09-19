@@ -6,6 +6,10 @@
 //! semantics of #12; [`generate_wavs`] runs the same pass over an explicit wav
 //! list; [`plan`] is the dry-run path (scan plus existence checks, no decode
 //! or analysis).
+//!
+//! Estimators are selected through [`Estimator`] and built by
+//! [`build_estimator`] (the feature-gated factory): the WORLD pair always,
+//! plus RMVPE when the `ml` feature is on (#48/#49).
 
 pub mod llsm;
 
@@ -25,14 +29,66 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 /// f0 estimator selection for [`F0Config`].
+///
+/// Data-only: the ML variant names no provider type, so the compat build
+/// (`--no-default-features`) compiles it too and rejects it at
+/// [`build_estimator`] time (#48).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Estimator {
     Dio,
     Harvest,
+    Rmvpe,
+}
+
+impl Estimator {
+    /// Whether this is one of the WORLD DSP estimators. The energy voicing
+    /// gate (#54) is a WORLD workaround, so it applies to those only (#53).
+    pub fn is_world(self) -> bool {
+        matches!(self, Estimator::Dio | Estimator::Harvest)
+    }
+
+    /// The user-facing one-liner the front ends show for this estimator
+    /// (wording fixed in #49).
+    pub fn description(self) -> &'static str {
+        match self {
+            Estimator::Dio => {
+                "Fast, but may struggle on less-than-ideal recordings. \
+                 A traditional DSP-based algorithm from WORLD."
+            }
+            Estimator::Harvest => "Robust, but slow. A traditional DSP-based algorithm from WORLD.",
+            Estimator::Rmvpe => {
+                "Fast and reliable ML based estimator. Requires model to be present."
+            }
+        }
+    }
+}
+
+/// The capability-aware default (#49): RMVPE when the ML tier is available,
+/// else DIO. The front ends resolve this once at startup; an explicit choice
+/// always wins.
+pub fn default_estimator(ml_available: bool) -> Estimator {
+    if ml_available {
+        Estimator::Rmvpe
+    } else {
+        Estimator::Dio
+    }
+}
+
+/// ML estimator settings (#48): the model file and the confidence threshold.
+/// Non-`Copy` because the path is owned; the pipeline keeps it in
+/// [`GenerateOptions`] and hands a clone to the provider.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MlConfig {
+    /// The `rmvpe.onnx` file; `None` resolves at factory time (executable
+    /// directory, then `KIRAFRQ_ML_DIR`).
+    pub model_path: Option<PathBuf>,
+    /// The #53 confidence override; `None` uses the model's own default
+    /// (RMVPE 0.03). Internal, no CLI/GUI knob.
+    pub confidence_threshold: Option<f64>,
 }
 
 /// f0 estimation settings shared by every wav in a run.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct F0Config {
     pub estimator: Estimator,
     pub floor_hz: f64,
@@ -46,6 +102,9 @@ pub struct F0Config {
     /// Internal, kept out of the headline API.
     #[doc(hidden)]
     pub energy_gate_ratio: f64,
+    /// The ML estimator's model and threshold (#48/#53); consulted only when
+    /// [`Estimator::Rmvpe`] is selected.
+    pub ml: MlConfig,
 }
 
 impl Default for F0Config {
@@ -58,6 +117,7 @@ impl Default for F0Config {
             stone_mask: true,
             world_quirks: true,
             energy_gate_ratio: 0.05,
+            ml: MlConfig::default(),
         }
     }
 }
@@ -95,6 +155,14 @@ pub trait F0Estimator: Send + Sync {
     ) -> Result<(), GeneratorError> {
         Ok(())
     }
+
+    /// Whether this estimator refines with StoneMask (#48). The pipeline
+    /// consults this before `refine_stonemask`, so an ML estimator never
+    /// refines even when `stone_mask` is set. Defaults to `false`: an
+    /// estimator must opt in.
+    fn supports_stonemask(&self) -> bool {
+        false
+    }
 }
 
 /// [`F0Estimator`] backed by kirafrq-world-binding (DIO / Harvest / StoneMask).
@@ -119,6 +187,12 @@ impl F0Estimator for WorldEstimator {
         let estimator = match self.config.estimator {
             Estimator::Dio => kirafrq_world_binding::Estimator::Dio,
             Estimator::Harvest => kirafrq_world_binding::Estimator::Harvest,
+            // The factory rejects RMVPE before a WorldEstimator is built.
+            Estimator::Rmvpe => {
+                return Err(GeneratorError::Config(
+                    "RMVPE is not a WORLD estimator".to_string(),
+                ));
+            }
         };
         let options = kirafrq_world_binding::F0Options {
             f0_floor_hz: self.config.floor_hz,
@@ -162,6 +236,157 @@ impl F0Estimator for WorldEstimator {
         track.temporal_positions = world_track.temporal_positions;
         track.f0_hz = world_track.f0_hz;
         Ok(())
+    }
+
+    fn supports_stonemask(&self) -> bool {
+        true
+    }
+}
+
+/// The RMVPE estimator over the ML provider (`ml` builds only).
+#[cfg(feature = "ml")]
+pub struct MlEstimator {
+    inner: kirafrq_ml_provider::rmvpe::Rmvpe,
+    model_path: PathBuf,
+}
+
+#[cfg(feature = "ml")]
+impl MlEstimator {
+    /// The model path this estimator will load, for callers that surface it
+    /// (the CLI's error hint, the GUI's availability check).
+    pub fn model_path(&self) -> &Path {
+        &self.model_path
+    }
+}
+
+#[cfg(feature = "ml")]
+impl F0Estimator for MlEstimator {
+    fn estimate(
+        &self,
+        samples: &[f64],
+        _sample_rate: u32,
+        _frame_period_ms: f64,
+        observer: Option<&dyn FrameObserver>,
+    ) -> Result<F0Track, GeneratorError> {
+        let progress = observer.map(MlProgress);
+        let progress = progress
+            .as_ref()
+            .map(|progress| progress as &dyn kirafrq_ml_provider::ProgressObserver);
+        let track = self
+            .inner
+            .estimate(samples, progress)
+            .map_err(|error| GeneratorError::Estimation(error.to_string()))?;
+        Ok(F0Track {
+            frame_period_ms: track.frame_period_ms,
+            temporal_positions: track.temporal_positions,
+            f0_hz: track.f0_hz,
+        })
+    }
+}
+
+/// Adapts core's frame observer onto the provider's coarse stage ticks (#48:
+/// at most coarse progress, no new machinery).
+#[cfg(feature = "ml")]
+struct MlProgress<'a>(&'a dyn FrameObserver);
+
+#[cfg(feature = "ml")]
+impl kirafrq_ml_provider::ProgressObserver for MlProgress<'_> {
+    fn report(&self, done: usize, total: usize) {
+        self.0.report(ProgressStage::Estimate, done, total);
+    }
+}
+
+/// Build the estimator for `config`, resolving the ML model file up front
+/// (#48/#49): selecting RMVPE without the `ml` feature or without a model
+/// file is an early [`GeneratorError::Config`] naming the expected file, the
+/// lookup directories and a download hint.
+///
+/// `jobs` is the run's single "cores" knob ([`GenerateOptions::jobs`]); the
+/// ML session maps it onto ONNX Runtime's intra-op threads.
+pub fn build_estimator(
+    config: &F0Config,
+    jobs: usize,
+) -> Result<Box<dyn F0Estimator>, GeneratorError> {
+    match config.estimator {
+        Estimator::Dio | Estimator::Harvest => Ok(Box::new(WorldEstimator::new(config.clone()))),
+        Estimator::Rmvpe => build_ml_estimator(config, jobs),
+    }
+}
+
+#[cfg(feature = "ml")]
+fn build_ml_estimator(
+    config: &F0Config,
+    jobs: usize,
+) -> Result<Box<dyn F0Estimator>, GeneratorError> {
+    let model_path = match &config.ml.model_path {
+        Some(path) => {
+            if !path.is_file() {
+                return Err(GeneratorError::Config(format!(
+                    "the ML model file {} does not exist",
+                    path.display()
+                )));
+            }
+            path.clone()
+        }
+        None => kirafrq_ml_provider::resolve_model()
+            .map_err(|error| GeneratorError::Config(format!("{error}; {ML_DOWNLOAD_HINT}")))?,
+    };
+    let policy = kirafrq_ml_provider::UvPolicy {
+        confidence_threshold: config
+            .ml
+            .confidence_threshold
+            .unwrap_or(kirafrq_ml_provider::RMVPE_DEFAULT_CONFIDENCE_THRESHOLD),
+        floor_hz: config.floor_hz,
+        ceiling_hz: config.ceiling_hz,
+    };
+    let inner = kirafrq_ml_provider::rmvpe::Rmvpe::new(model_path.clone(), policy, jobs);
+    // Load the session now so an unloadable model is the same early config
+    // error as a missing one (#49), not a per-file failure.
+    inner
+        .ensure_session()
+        .map_err(|error| GeneratorError::Config(format!("{error}; {ML_DOWNLOAD_HINT}")))?;
+    Ok(Box::new(MlEstimator { inner, model_path }))
+}
+
+#[cfg(not(feature = "ml"))]
+fn build_ml_estimator(
+    _config: &F0Config,
+    _jobs: usize,
+) -> Result<Box<dyn F0Estimator>, GeneratorError> {
+    Err(GeneratorError::Config(format!(
+        "this build has no ML estimator support (compiled without the `ml` feature); \
+         {ML_DOWNLOAD_HINT}"
+    )))
+}
+
+/// The download hint the CLI and GUI share for an unavailable ML model (#48).
+pub const ML_DOWNLOAD_HINT: &str = "RMVPE weights are not redistributed with KiraFrqGen; \
+     download `rmvpe.onnx` (e.g. from the RVC project's HuggingFace mirror \
+     `lj1995/VoiceConversionWebUI`) and place it next to the executable or in \
+     the directory named by KIRAFRQ_ML_DIR";
+
+/// Whether this build can offer the ML estimator at all (`ml` on).
+pub const ML_SUPPORTED: bool = cfg!(feature = "ml");
+
+/// Whether RMVPE can run right now: the feature is on and a model file
+/// resolves. Used by the front ends to pick the capability-aware default
+/// (#49) and to grey the option out.
+pub fn ml_available(config: &F0Config) -> bool {
+    if !ML_SUPPORTED {
+        return false;
+    }
+    match &config.ml.model_path {
+        Some(path) => path.is_file(),
+        None => {
+            #[cfg(feature = "ml")]
+            {
+                kirafrq_ml_provider::resolve_model().is_ok()
+            }
+            #[cfg(not(feature = "ml"))]
+            {
+                false
+            }
+        }
     }
 }
 

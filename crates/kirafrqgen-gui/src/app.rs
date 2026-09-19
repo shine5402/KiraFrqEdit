@@ -15,7 +15,7 @@ use eframe::egui::{
 use egui_phosphor::regular as icons;
 use kirafrqgen_core::{
     CancelToken, Estimator, F0Config, FileReport, GenerateOptions, Progress, RunSummary, Sharing,
-    Target, WorldEstimator, generate_wavs, plan,
+    Target, build_estimator, generate_wavs, ml_available, plan,
 };
 
 use crate::run::{Row, RunState, Status};
@@ -173,6 +173,10 @@ impl Progress for GuiProgress {
 pub struct KiraFrqGenApp {
     // Options (session-only).
     estimator: Estimator,
+    /// Whether the ML tier can run; resolves the capability-aware default
+    /// once at startup (#49) and greys the RMVPE radio when false.
+    ml_available: bool,
+    world_quirks: bool,
     targets: Targets,
     delete_llsm: bool,
     japanese_codepage: bool,
@@ -199,8 +203,11 @@ impl KiraFrqGenApp {
         let max_cores = std::thread::available_parallelism()
             .map(|cores| cores.get() as u32)
             .unwrap_or(4);
+        let ml_available = ml_available(&F0Config::default());
         Self {
-            estimator: Estimator::Harvest,
+            estimator: kirafrqgen_core::default_estimator(ml_available),
+            ml_available,
+            world_quirks: true,
             targets: Targets {
                 frq: true,
                 pmk: false,
@@ -268,6 +275,7 @@ impl KiraFrqGenApp {
             overwrite: true,
             f0: F0Config {
                 estimator: self.estimator,
+                world_quirks: self.world_quirks,
                 ..F0Config::default()
             },
             jobs: if self.cores_auto {
@@ -351,8 +359,12 @@ impl KiraFrqGenApp {
         let worker_state = Arc::clone(&state);
         let worker_stop = Arc::clone(&stop);
         std::thread::spawn(move || {
-            let estimator = WorldEstimator::new(opts.f0);
-            let outcome = generate_wavs(&opts, &wavs, &estimator, &progress, &worker_stop);
+            let outcome = match build_estimator(&opts.f0, opts.jobs) {
+                Ok(estimator) => {
+                    generate_wavs(&opts, &wavs, estimator.as_ref(), &progress, &worker_stop)
+                }
+                Err(error) => Err(error),
+            };
             let mut state = lock(&worker_state);
             match outcome {
                 Ok(summary) => state.finished(&summary),
@@ -381,13 +393,33 @@ impl KiraFrqGenApp {
             ui.horizontal(|ui| {
                 ui.radio_value(&mut self.estimator, Estimator::Harvest, "Harvest");
                 ui.radio_value(&mut self.estimator, Estimator::Dio, "DIO");
+                // #48: the compat build has no ML option at all.
+                if cfg!(feature = "ml") {
+                    let rmvpe = ui.add_enabled(
+                        self.ml_available,
+                        egui::RadioButton::new(self.estimator == Estimator::Rmvpe, "RMVPE"),
+                    );
+                    if rmvpe.clicked() {
+                        self.estimator = Estimator::Rmvpe;
+                    }
+                    if !self.ml_available {
+                        rmvpe.on_hover_text(
+                            "RMVPE needs a model file. Put `rmvpe.onnx` next to the executable \
+                             or in the directory named by KIRAFRQ_ML_DIR, then restart.",
+                        );
+                    }
+                }
             });
-            ui.label(
-                RichText::new(match self.estimator {
-                    Estimator::Harvest => "Robust, but slow.",
-                    Estimator::Dio => "Faster, but may struggle on less-than-ideal recordings.",
-                })
-                .weak(),
+            ui.label(RichText::new(self.estimator.description()).weak());
+
+            ui.add_space(8.0);
+            let quirks = ui.add_enabled(
+                self.estimator.is_world(),
+                egui::Checkbox::new(&mut self.world_quirks, "WORLD quirks"),
+            );
+            quirks.on_hover_text(
+                "The tuned WORLD path: a relative energy voicing gate that suppresses \
+                 spurious voicing over breath and noise. Applies to the WORLD estimators only.",
             );
 
             ui.add_space(8.0);
@@ -1266,6 +1298,12 @@ mod tests {
         let last_rim = points[points.len() - 1];
         assert!(last_rim.x < center.x);
         assert!((last_rim.y - center.y).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_default_estimator_follows_the_ml_capability() {
+        assert_eq!(kirafrqgen_core::default_estimator(true), Estimator::Rmvpe);
+        assert_eq!(kirafrqgen_core::default_estimator(false), Estimator::Dio);
     }
 
     #[test]

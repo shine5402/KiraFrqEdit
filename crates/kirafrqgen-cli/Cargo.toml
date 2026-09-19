@@ -9,8 +9,14 @@ publish.workspace = true
 name = "kirafrqgen-cli"
 path = "src/main.rs"
 
+[features]
+# The modern default artifact: the ML tier is compiled in and ONNX Runtime is
+# linked statically (#48). `--no-default-features` is the compat build.
+default = ["ml"]
+ml = ["kirafrqgen-core/ml"]
+
 [dependencies]
-kirafrqgen-core.workspace = true
+kirafrqgen-core = { workspace = true, default-features = false }
 clap.workspace = true
 ctrlc.workspace = true
 
