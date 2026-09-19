@@ -1,0 +1,9 @@
+[package]
+name = "kirafrq-credits"
+description = "Shared credits and third-party license notices for the CLI and GUI"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]

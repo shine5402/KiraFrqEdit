@@ -1931,6 +1931,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kirafrq-credits"
+version = "0.1.0"
+
+[[package]]
 name = "kirafrq-formats"
 version = "0.1.0"
 dependencies = [
@@ -1963,6 +1967,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "hound",
+ "kirafrq-credits",
  "kirafrq-formats",
  "kirafrqgen-core",
 ]
@@ -1986,6 +1991,7 @@ dependencies = [
  "arboard",
  "eframe",
  "egui-phosphor",
+ "kirafrq-credits",
  "kirafrqgen-core",
  "rfd",
 ]
@@ -4861,6 +4867,13 @@ name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "kirafrq-credits",
+]
 
 [[package]]
 name = "yoke"

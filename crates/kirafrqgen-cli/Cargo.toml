@@ -4,6 +4,7 @@ description = "KiraFrqGen command-line interface"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "kirafrqgen-cli"
@@ -17,6 +18,7 @@ ml = ["kirafrqgen-core/ml"]
 
 [dependencies]
 kirafrqgen-core = { workspace = true, default-features = false }
+kirafrq-credits.workspace = true
 clap.workspace = true
 ctrlc.workspace = true
 

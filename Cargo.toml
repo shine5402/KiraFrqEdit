@@ -5,9 +5,11 @@ members = [
     "crates/kirafrq-audio",
     "crates/kirafrq-world-binding",
     "crates/kirafrq-ml-provider",
+    "crates/kirafrq-credits",
     "crates/kirafrqgen-core",
     "crates/kirafrqgen-cli",
     "crates/kirafrqgen-gui",
+    "xtask",
 ]
 
 [workspace.package]
@@ -15,6 +17,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 repository = "https://github.com/shine5402/KiraFrqEdit"
+license = "MIT"
 
 [workspace.dependencies]
 # Exact pins verified by research (#5, #6); bump deliberately.
@@ -52,4 +55,5 @@ kirafrq-formats = { path = "crates/kirafrq-formats" }
 kirafrq-audio = { path = "crates/kirafrq-audio" }
 kirafrq-world-binding = { path = "crates/kirafrq-world-binding" }
 kirafrq-ml-provider = { path = "crates/kirafrq-ml-provider" }
+kirafrq-credits = { path = "crates/kirafrq-credits" }
 kirafrqgen-core = { path = "crates/kirafrqgen-core", default-features = false }
