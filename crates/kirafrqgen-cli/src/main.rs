@@ -11,7 +11,7 @@ use kirafrqgen_cli::args::Cli;
 use kirafrqgen_cli::report::{self, Reporter, Verbosity};
 use kirafrqgen_cli::{exit_code, prompt};
 use kirafrqgen_core::{
-    CancelToken, Estimator, GenerateOptions, Sharing, Target, build_estimator, generate, plan,
+    CancelToken, GenerateOptions, Sharing, Target, build_estimator, generate, plan,
 };
 
 fn main() -> ExitCode {
@@ -102,9 +102,9 @@ fn run(cli: Cli) -> u8 {
     }
 
     // The estimator factory resolves the ML model up front (#49): a missing
-    // model is a single early error, before any file is touched. The quirks
+    // model is a single early error, before any file is touched. The tuning
     // warning fires first, so an explicit switch is always acknowledged.
-    if let Some(warning) = world_quirks_warning(&cli, verbosity) {
+    if let Some(warning) = recommended_tuning_warning(&cli, verbosity) {
         eprintln!("warning: {warning}");
     }
     let estimator = match build_estimator(&opts.f0, opts.jobs) {
@@ -124,15 +124,17 @@ fn run(cli: Cli) -> u8 {
     }
 }
 
-/// #49: an explicit WORLD-quirks switch alongside a non-WORLD estimator is a
-/// warned no-op; the run continues.
-fn world_quirks_warning(cli: &Cli, verbosity: Verbosity) -> Option<String> {
-    if !cli.no_world_quirks || verbosity == Verbosity::Quiet {
+/// #49/#71: an explicit recommended-tuning switch alongside an estimator that
+/// never uses it is a warned no-op; the run continues. The tuning currently
+/// covers the WORLD pair only, so the ML estimators warn.
+fn recommended_tuning_warning(cli: &Cli, verbosity: Verbosity) -> Option<String> {
+    if !cli.no_recommended_tuning || verbosity == Verbosity::Quiet {
         return None;
     }
-    if cli.estimator() == Estimator::Rmvpe {
+    if !cli.estimator().is_world() {
         return Some(
-            "--no-world-quirks has no effect: it applies to the WORLD estimators only".to_string(),
+            "--no-recommended-tuning has no effect: it applies to the WORLD estimators only"
+                .to_string(),
         );
     }
     None

@@ -71,14 +71,20 @@ impl Estimator {
     }
 }
 
-/// The capability-aware default (#49): RMVPE when the ML tier is available,
-/// else DIO. The front ends resolve this once at startup; an explicit choice
-/// always wins.
-pub fn default_estimator(ml_available: bool) -> Estimator {
-    if ml_available {
+/// The capability-aware default (#49/#62/#71): RMVPE when its model resolves,
+/// else SwiftF0 in an ML build, else Harvest. The front ends resolve this once
+/// at startup; an explicit choice always wins.
+///
+/// SwiftF0 ships bundled, so a modern build is effectively RMVPE-else-SwiftF0;
+/// the compat build (`--no-default-features`) falls back Harvest-else-DIO.
+/// `rmvpe_available` is [`ml_available`]'s result (RMVPE's model resolves).
+pub fn default_estimator(rmvpe_available: bool) -> Estimator {
+    if rmvpe_available {
         Estimator::Rmvpe
+    } else if ML_SUPPORTED {
+        Estimator::SwiftF0
     } else {
-        Estimator::Dio
+        Estimator::Harvest
     }
 }
 
@@ -103,9 +109,11 @@ pub struct F0Config {
     pub floor_hz: f64,
     pub ceiling_hz: f64,
     pub stone_mask: bool,
-    /// The tuned WORLD path (#46/#54): when false the estimator's output is
-    /// written as-is, with no energy voicing gate. CLI/GUI surfacing is #49.
-    pub world_quirks: bool,
+    /// "Apply recommended tuning" (#46/#54/#62): when false the estimator's
+    /// output is written as-is, with no energy voicing gate (WORLD and
+    /// SwiftF0) and no aperiodicity gate (Harvest). CLI/GUI surfacing is
+    /// #49/#71.
+    pub recommended_tuning: bool,
     /// The energy voicing gate's threshold (#54): a voiced frame quieter than
     /// this share of the file's p90 voiced-frame amplitude is forced unvoiced.
     /// Internal, kept out of the headline API.
@@ -129,7 +137,7 @@ impl Default for F0Config {
             floor_hz: 71.0,
             ceiling_hz: 800.0,
             stone_mask: true,
-            world_quirks: true,
+            recommended_tuning: true,
             energy_gate_ratio: 0.05,
             aperiodicity_gate_threshold: 0.85,
             ml: MlConfig::default(),
@@ -681,6 +689,20 @@ impl std::error::Error for GeneratorError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_default_estimator_prefers_rmvpe_then_swiftf0_then_harvest() {
+        // #62/#71: RMVPE when its model resolves, else SwiftF0 in an ML build,
+        // else Harvest. DIO is selectable but never the default.
+        assert_eq!(default_estimator(true), Estimator::Rmvpe);
+        let fallback = if ML_SUPPORTED {
+            Estimator::SwiftF0
+        } else {
+            Estimator::Harvest
+        };
+        assert_eq!(default_estimator(false), fallback);
+        assert_ne!(fallback, Estimator::Dio);
+    }
 
     #[test]
     fn the_rmvpe_description_does_not_mention_a_required_model() {

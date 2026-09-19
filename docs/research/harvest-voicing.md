@@ -140,10 +140,10 @@ Recommendation: make this the first experiment — it is free and measurable.
 
 ### 2. D4C aperiodicity gate (the principled Harvest fix)
 
-**Adopted (#55 decision, #64 build), as a supplement to the energy gate.** On the tuned
-(`WORLD quirks`) path, Harvest only: force unvoiced where the raw `D4CLoveTrain` ratio is below
-**0.85** (D4C's own default split, an internal constant with no user knob), applied after the
-energy gate. Measured pooled over 6 banks / 240 wavs against RMVPE (conf ≥ 0.03): energy alone
+**Adopted (#55 decision, #64 build), as a supplement to the energy gate.** On the recommended
+tuning (`Apply recommended tuning`) path, Harvest only: force unvoiced where the raw `D4CLoveTrain`
+ratio is below **0.85** (D4C's own default split, an internal constant with no user knob), applied
+after the energy gate. Measured pooled over 6 banks / 240 wavs against RMVPE (conf ≥ 0.03): energy alone
 removed 75.0% of the raw spurious frames at a 2.51% raw true-voicing cut; energy + D4C reached
 86.0% at 4.29%, clearing 43.8% of the energy gate's residual at a 1.01% incremental cut. D4C
 alone is no replacement (18.3% at 1.19%). Cost is ~2.5–3.6% of Harvest+StoneMask. DIO is

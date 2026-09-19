@@ -26,6 +26,12 @@ use crate::tree::{DirNode, Targets, Tree, WavEntry, missing_label, target_name};
 const MODEL_HELP_URL: &str =
     "https://github.com/shine5402/KiraFrqEdit/blob/main/README.md#ml-model";
 
+/// The recommended-tuning toggle's own label (#71): a separate label, not a
+/// tooltip.
+const RECOMMENDED_TUNING_LABEL: &str = "Applies tuning tailored to the workload, which \
+     helps reduce problems like over-voicing on breath and noise. Turn off to use the raw \
+     estimator output.";
+
 fn estimator_runnable(estimator: Estimator, ml_available: bool) -> bool {
     estimator != Estimator::Rmvpe || ml_available
 }
@@ -181,11 +187,11 @@ impl Progress for GuiProgress {
 pub struct KiraFrqGenApp {
     // Options (session-only).
     estimator: Estimator,
-    /// Whether the ML tier can run; resolves the capability-aware default
-    /// once at startup (#49) and gates RMVPE runs and the model-missing hint
+    /// Whether RMVPE can run; resolves the capability-aware default once at
+    /// startup (#49/#71) and gates RMVPE runs and the model-missing hint
     /// (#72).
     ml_available: bool,
-    world_quirks: bool,
+    recommended_tuning: bool,
     targets: Targets,
     delete_llsm: bool,
     japanese_codepage: bool,
@@ -216,7 +222,7 @@ impl KiraFrqGenApp {
         Self {
             estimator: kirafrqgen_core::default_estimator(ml_available),
             ml_available,
-            world_quirks: true,
+            recommended_tuning: true,
             targets: Targets {
                 frq: true,
                 pmk: false,
@@ -284,7 +290,7 @@ impl KiraFrqGenApp {
             overwrite: true,
             f0: F0Config {
                 estimator: self.estimator,
-                world_quirks: self.world_quirks,
+                recommended_tuning: self.recommended_tuning,
                 ..F0Config::default()
             },
             jobs: if self.cores_auto {
@@ -400,8 +406,8 @@ impl KiraFrqGenApp {
         ui.add_enabled_ui(!running, |ui| {
             ui.label(RichText::new("ESTIMATOR").size(13.0).strong());
             ui.horizontal(|ui| {
-                ui.radio_value(&mut self.estimator, Estimator::Harvest, "Harvest");
-                ui.radio_value(&mut self.estimator, Estimator::Dio, "DIO");
+                // #71: the list follows the default-priority order, RMVPE >
+                // SwiftF0 > Harvest > DIO.
                 // #48: the compat build has no ML option at all. A missing
                 // model leaves the ML radio enabled; the hint below and the
                 // disabled Generate carry the unavailability (#72).
@@ -411,6 +417,8 @@ impl KiraFrqGenApp {
                     // selectable in a modern build.
                     ui.radio_value(&mut self.estimator, Estimator::SwiftF0, "SwiftF0");
                 }
+                ui.radio_value(&mut self.estimator, Estimator::Harvest, "Harvest");
+                ui.radio_value(&mut self.estimator, Estimator::Dio, "DIO");
             });
             ui.label(RichText::new(self.estimator.description()).weak());
             if !estimator_runnable(self.estimator, self.ml_available) {
@@ -428,15 +436,11 @@ impl KiraFrqGenApp {
             }
 
             ui.add_space(8.0);
-            let quirks = ui.add_enabled(
+            ui.add_enabled(
                 self.estimator.is_world(),
-                egui::Checkbox::new(&mut self.world_quirks, "Use WORLD quirks"),
+                egui::Checkbox::new(&mut self.recommended_tuning, "Apply recommended tuning"),
             );
-            quirks.on_hover_text(
-                "Enable tuning and migrations for WORLD estimators that can reduce false \
-                 positive on noise or breaths. Disable this to gain the original WORLD \
-                 behavior.",
-            );
+            ui.add(egui::Label::new(RichText::new(RECOMMENDED_TUNING_LABEL).weak()).wrap());
 
             ui.add_space(8.0);
             ui.label(RichText::new("FORMATS").size(13.0).strong());
@@ -1318,9 +1322,17 @@ mod tests {
     }
 
     #[test]
-    fn the_default_estimator_follows_the_ml_capability() {
+    fn the_default_estimator_follows_the_62_priority() {
+        // RMVPE when its model resolves, else SwiftF0 in an ML build, else
+        // Harvest; DIO is selectable but never the default (#71).
         assert_eq!(kirafrqgen_core::default_estimator(true), Estimator::Rmvpe);
-        assert_eq!(kirafrqgen_core::default_estimator(false), Estimator::Dio);
+        let fallback = if kirafrqgen_core::ML_SUPPORTED {
+            Estimator::SwiftF0
+        } else {
+            Estimator::Harvest
+        };
+        assert_eq!(kirafrqgen_core::default_estimator(false), fallback);
+        assert_ne!(fallback, Estimator::Dio);
     }
 
     #[test]

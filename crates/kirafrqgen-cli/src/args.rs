@@ -22,16 +22,16 @@ pub struct Cli {
     #[arg(long, value_delimiter = ',', value_name = "FORMAT")]
     pub format: Vec<FormatArg>,
 
-    /// f0 estimator for every wav. Defaults to the ML estimator when this
-    /// build has ML support and a model file is present, else dio.
+    /// f0 estimator for every wav. Defaults to RMVPE when its model is
+    /// present, else SwiftF0 in an ML build, else Harvest.
     #[arg(long, value_enum)]
     pub estimator: Option<EstimatorArg>,
 
-    /// Enable tuning and migrations for WORLD estimators that can reduce false
-    /// positive on noise or breaths. Disable this to gain the original WORLD
-    /// behavior.
+    /// Apply tuning tailored to the workload, which helps reduce problems like
+    /// over-voicing on breath and noise. Turn off to use the raw estimator
+    /// output.
     #[arg(long)]
-    pub no_world_quirks: bool,
+    pub no_recommended_tuning: bool,
 
     /// Regenerate tables that already exist.
     #[arg(long)]
@@ -85,17 +85,18 @@ impl Cli {
     }
 
     /// The standing f0 defaults (#7/#8) with the resolved estimator and the
-    /// WORLD-quirks toggle (#49).
+    /// recommended-tuning toggle (#49/#71).
     pub fn f0_config(&self) -> F0Config {
         F0Config {
             estimator: self.estimator(),
-            world_quirks: !self.no_world_quirks,
+            recommended_tuning: !self.no_recommended_tuning,
             ..F0Config::default()
         }
     }
 
-    /// The capability-aware default (#49): RMVPE when the build has ML and a
-    /// model file resolves, else DIO. An explicit `--estimator` always wins.
+    /// The capability-aware default (#49/#71): RMVPE when the build has ML and
+    /// its model resolves, else SwiftF0 in an ML build, else Harvest. An
+    /// explicit `--estimator` always wins.
     pub fn estimator(&self) -> Estimator {
         if let Some(explicit) = self.estimator {
             return explicit.into();
@@ -320,12 +321,12 @@ mod tests {
     }
 
     #[test]
-    fn world_quirks_default_on_and_no_world_quirks_turns_them_off() {
-        assert!(parse_ok(&["bank"]).f0_config().world_quirks);
+    fn recommended_tuning_default_on_and_no_recommended_tuning_turns_it_off() {
+        assert!(parse_ok(&["bank"]).f0_config().recommended_tuning);
         assert!(
-            !parse_ok(&["bank", "--no-world-quirks"])
+            !parse_ok(&["bank", "--no-recommended-tuning"])
                 .f0_config()
-                .world_quirks
+                .recommended_tuning
         );
     }
 

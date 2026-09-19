@@ -271,11 +271,11 @@ fn process_wav(
         return WavResult { report, mrq: None };
     }
 
-    // The tuned WORLD path's post-passes (#54/#64): the energy gate applies to
-    // both WORLD estimators, the aperiodicity gate to Harvest only. The ML
+    // The recommended tuning's post-passes (#54/#64): the energy gate applies
+    // to both WORLD estimators, the aperiodicity gate to Harvest only. The ML
     // estimator is excluded (#53): its confidence gate is its voicing policy,
     // and the WORLD gates are a WORLD workaround.
-    if opts.f0.world_quirks && is_world(opts.f0.estimator) {
+    if opts.f0.recommended_tuning && is_world(opts.f0.estimator) {
         voicing::apply_energy_gate(&decoded.samples, &mut track, opts.f0.energy_gate_ratio);
 
         // A no-voiced (silence-only) track is a no-op and skips the D4C pass
