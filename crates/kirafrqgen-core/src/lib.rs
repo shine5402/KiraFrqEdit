@@ -13,6 +13,7 @@ mod paths;
 mod run;
 mod scan;
 mod table;
+mod voicing;
 
 pub use kirafrq_formats::mrq::Sharing;
 pub use kirafrq_world_binding::{FrameObserver, ProgressStage};
@@ -37,6 +38,14 @@ pub struct F0Config {
     pub floor_hz: f64,
     pub ceiling_hz: f64,
     pub stone_mask: bool,
+    /// The tuned WORLD path (#46/#54): when false the estimator's output is
+    /// written as-is, with no energy voicing gate. CLI/GUI surfacing is #49.
+    pub world_quirks: bool,
+    /// The energy voicing gate's threshold (#54): a voiced frame quieter than
+    /// this share of the file's p90 voiced-frame amplitude is forced unvoiced.
+    /// Internal, kept out of the headline API.
+    #[doc(hidden)]
+    pub energy_gate_ratio: f64,
 }
 
 impl Default for F0Config {
@@ -47,6 +56,8 @@ impl Default for F0Config {
             floor_hz: 71.0,
             ceiling_hz: 800.0,
             stone_mask: true,
+            world_quirks: true,
+            energy_gate_ratio: 0.05,
         }
     }
 }

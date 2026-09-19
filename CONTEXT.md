@@ -33,6 +33,20 @@ consonants are loud but pitchless.
 The algorithm that estimates f0 from audio: WORLD's DIO (fast) or Harvest (better), with StoneMask
 refinement. _Avoid_: "engine" for these.
 
+## Spurious voicing
+
+Frames an f0 estimator marks voiced over breath, noise or near-silence — most visibly a low, flat f0
+line through a noise floor. The tuned WORLD path exists to suppress this class; it is not a name
+for every wrong voiced/unvoiced decision. _Avoid_: "over-voicing" in canonical prose.
+
+## Energy voicing gate
+
+The workaround the tuned WORLD path applies to spurious voicing: a frame is kept voiced only when
+its per-frame amplitude clears a relative share of the file's voiced-frame loudness (KiraFrqGen's
+computed amplitude, not one read from an existing frq). It targets the quiet noise-floor class —
+breath and onsets at speech level pass through. _Avoid_: bare "gate" — an aperiodicity gate is a
+different stage.
+
 ## Resampler
 
 A UTAU synthesis engine (moresampler, TIPS, fresamp, resampler, ...). "Engine" alone is ambiguous

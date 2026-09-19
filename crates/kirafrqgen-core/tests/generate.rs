@@ -927,6 +927,25 @@ fn missing_and_wavless_roots_are_fatal() {
     ));
 }
 
+#[test]
+fn an_invalid_energy_gate_ratio_is_a_config_error() {
+    let scratch = Scratch::new("gate-ratio");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 512]);
+    let estimator = FakeEstimator::new(&[220.0]);
+
+    for ratio in [f64::NAN, -0.01] {
+        let mut opts = options(&scratch.0, &[Target::Frq]);
+        opts.f0.energy_gate_ratio = ratio;
+        assert!(
+            matches!(
+                run_result(&opts, &estimator),
+                Err(GeneratorError::Config(_))
+            ),
+            "ratio {ratio} must be rejected"
+        );
+    }
+}
+
 // --- estimator wiring -------------------------------------------------------
 
 #[test]
@@ -952,6 +971,96 @@ fn stone_mask_refinement_is_wired_to_the_config() {
     assert_eq!(estimator.refined_count(), 1, "no refine with StoneMask off");
     let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
     assert_eq!(table.f0_hz, [100.0, 200.0, 0.0, 0.0]);
+}
+
+// --- energy voicing gate (#54) ----------------------------------------------
+
+/// 1024 samples: loud, i16 33, loud, loud, empty — frq amplitudes
+/// `[8192, 33, 8192, 8192, 0]`, so the second frame sits under the 5% gate
+/// and the empty trailing frame is unvoiced by #8 either way.
+fn gated_samples() -> Vec<i16> {
+    let mut samples = vec![SAMPLE; 1024];
+    samples[256..512].fill(33);
+    samples
+}
+
+#[test]
+fn the_energy_gate_forces_quiet_voiced_frames_unvoiced_by_default() {
+    let scratch = Scratch::new("energy-gate");
+    write_wav(&scratch, "A2.wav", mono(), &gated_samples());
+    let estimator = FakeEstimator::new(&[110.0, 220.0, 330.0, 440.0, 550.0]);
+
+    let opts = options(&scratch.0, &[Target::Frq]);
+    assert!(opts.f0.world_quirks, "the default is the tuned path");
+    run(&opts, &estimator);
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz, [110.0, 0.0, 330.0, 440.0, 0.0]);
+    assert_eq!(
+        table.amplitude,
+        Some(vec![8192.0, 33.0, 8192.0, 8192.0, 0.0])
+    );
+    assert_eq!(
+        table.key_hz,
+        880.0 / 3.0,
+        "key over the gated voiced frames"
+    );
+}
+
+#[test]
+fn world_quirks_off_writes_the_untouched_estimator_output() {
+    let scratch = Scratch::new("energy-gate-off");
+    write_wav(&scratch, "A2.wav", mono(), &gated_samples());
+    let estimator = FakeEstimator::new(&[110.0, 220.0, 330.0, 440.0, 550.0]);
+
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.world_quirks = false;
+    run(&opts, &estimator);
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz, [110.0, 220.0, 330.0, 440.0, 0.0]);
+}
+
+#[test]
+fn the_energy_gate_applies_when_frq_is_not_a_target() {
+    let scratch = Scratch::new("energy-gate-mrq");
+    write_wav(&scratch, "A2.wav", mono(), &gated_samples());
+    let estimator = FakeEstimator::new(&[110.0, 220.0, 330.0, 440.0, 550.0]);
+
+    run(&options(&scratch.0, &[Target::Mrq]), &estimator);
+
+    let desc = mrq::Desc::read(&mrq::desc_path(&scratch.0))
+        .unwrap()
+        .unwrap();
+    let entry = &desc.entries()[0];
+    assert_eq!(entry_nf0(entry), 4);
+    assert_eq!(entry_f0(entry), [110.0, 0.0, 330.0, 440.0]);
+}
+
+#[test]
+fn the_energy_gate_is_a_no_op_when_the_file_is_silent() {
+    let scratch = Scratch::new("energy-gate-silence");
+    write_wav(&scratch, "A2.wav", mono(), &[0; 512]);
+    let estimator = FakeEstimator::new(&[220.0]);
+
+    run(&options(&scratch.0, &[Target::Frq]), &estimator);
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz, [220.0, 220.0, 0.0], "p90 = 0 skips the gate");
+    assert!(table.f0_hz.iter().all(|value| value.is_finite()));
+}
+
+#[test]
+fn the_energy_gate_is_a_no_op_without_voiced_frames() {
+    let scratch = Scratch::new("energy-gate-unvoiced");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 512]);
+    let estimator = FakeEstimator::new(&[0.0]);
+
+    run(&options(&scratch.0, &[Target::Frq]), &estimator);
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz, [0.0; 3]);
+    assert_eq!(table.key_hz, 0.0);
 }
 
 // --- progress ---------------------------------------------------------------
