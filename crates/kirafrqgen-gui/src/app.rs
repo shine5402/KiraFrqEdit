@@ -416,9 +416,12 @@ impl KiraFrqGenApp {
             if !estimator_runnable(self.estimator, self.ml_available) {
                 ui.horizontal_wrapped(|ui| {
                     let red = ui.visuals().error_fg_color;
+                    let link = ui.visuals().hyperlink_color;
                     ui.colored_label(red, "The model required for this estimator is not found.");
                     ui.hyperlink_to(
-                        RichText::new("Click here to see how to obtain it.").color(red),
+                        RichText::new("Click here to see how to obtain it.")
+                            .color(link)
+                            .underline(),
                         MODEL_HELP_URL,
                     );
                 });
