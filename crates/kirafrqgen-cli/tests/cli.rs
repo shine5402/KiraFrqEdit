@@ -589,13 +589,16 @@ fn help_lists_every_estimator_name_this_build_has() {
     for name in ["dio", "harvest"] {
         assert!(run.stdout.contains(name), "{name} missing: {}", run.stdout);
     }
-    // #48: the compat build has no ML option, so it must not advertise one.
-    assert_eq!(
-        run.stdout.contains("rmvpe"),
-        cfg!(feature = "ml"),
-        "{}",
-        run.stdout
-    );
+    // #48/#69: the compat build has no ML options, so it must not advertise
+    // any.
+    for name in ["rmvpe", "swiftf0"] {
+        assert_eq!(
+            run.stdout.contains(name),
+            cfg!(feature = "ml"),
+            "{name}: {}",
+            run.stdout
+        );
+    }
     assert!(run.stderr.is_empty(), "help goes to stdout: {}", run.stderr);
 }
 
@@ -616,6 +619,30 @@ fn rmvpe_runs_end_to_end_with_the_committed_fixture() {
         &["bank", "--estimator", "rmvpe", "-v"],
         &[("KIRAFRQ_ML_DIR", &model_dir)],
     );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(run.stderr.contains("wrote frq"), "{}", run.stderr);
+
+    let table = frq::read(&scratch.path("bank/A2_wav.frq")).unwrap();
+    assert_eq!(table.sample_rate, 44_100);
+    assert_eq!(table.hop_samples, 256);
+    for &value in &table.f0_hz {
+        assert!(value.is_finite(), "non-finite f0: {value}");
+        assert!((71.0..=800.0).contains(&value) || value == 0.0, "{value}");
+    }
+    assert_eq!(*table.f0_hz.last().unwrap(), 0.0, "the trailing rule");
+}
+
+/// #69: SwiftF0 bundles its MIT model, so `--estimator swiftf0` must run end
+/// to end with nothing on disk (modern build only).
+#[test]
+fn swiftf0_runs_end_to_end_with_the_bundled_model() {
+    if !cfg!(feature = "ml") {
+        return;
+    }
+    let scratch = Scratch::new("swiftf0-bundled");
+    write_tone(&scratch, "bank/A2.wav");
+
+    let run = cli(&scratch.0, &["bank", "--estimator", "swiftf0", "-v"]);
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert!(run.stderr.contains("wrote frq"), "{}", run.stderr);
 

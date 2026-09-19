@@ -6,6 +6,10 @@
 /// `peak_p >= 0.03`), the default when the config carries no override.
 pub const RMVPE_DEFAULT_CONFIDENCE_THRESHOLD: f64 = 0.03;
 
+/// SwiftF0's default confidence threshold: the paper's "approximately 90%"
+/// (#59/#62), the default when the config carries no override.
+pub const SWIFTF0_DEFAULT_CONFIDENCE_THRESHOLD: f64 = 0.9;
+
 /// The native-grid voicing decision: `f0` is voiced iff it is finite, inside
 /// the inclusive `[floor_hz, ceiling_hz]` range, and its peak salience is at
 /// or above the confidence threshold. Order of the two gates is immaterial.
@@ -22,6 +26,15 @@ impl UvPolicy {
     pub fn rmvpe(threshold: Option<f64>) -> Self {
         Self {
             confidence_threshold: threshold.unwrap_or(RMVPE_DEFAULT_CONFIDENCE_THRESHOLD),
+            floor_hz: 71.0,
+            ceiling_hz: 800.0,
+        }
+    }
+
+    /// The #53 defaults for SwiftF0: 0.9, the map's 71-800 Hz range.
+    pub fn swiftf0(threshold: Option<f64>) -> Self {
+        Self {
+            confidence_threshold: threshold.unwrap_or(SWIFTF0_DEFAULT_CONFIDENCE_THRESHOLD),
             floor_hz: 71.0,
             ceiling_hz: 800.0,
         }
@@ -54,6 +67,17 @@ mod tests {
     fn the_rmvpe_default_threshold_is_0_03_and_the_override_wins() {
         assert_eq!(policy().confidence_threshold, 0.03);
         assert_eq!(UvPolicy::rmvpe(Some(0.9)).confidence_threshold, 0.9);
+    }
+
+    #[test]
+    fn the_swiftf0_default_threshold_is_0_9_and_the_override_wins() {
+        let policy = UvPolicy::swiftf0(None);
+        assert_eq!(policy.confidence_threshold, 0.9);
+        assert_eq!(policy.floor_hz, 71.0);
+        assert_eq!(policy.ceiling_hz, 800.0);
+        assert_eq!(UvPolicy::swiftf0(Some(0.5)).confidence_threshold, 0.5);
+        assert_eq!(policy.apply(220.0, 0.9), 220.0);
+        assert_eq!(policy.apply(220.0, 0.9 - 1e-12), 0.0);
     }
 
     #[test]

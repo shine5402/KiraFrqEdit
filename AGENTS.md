@@ -38,8 +38,8 @@ outputs wrong pitch, glitches and pops.
 
 - `crates/` — the Cargo workspace: `kirafrq-formats` (neutral `FrequencyTable` + frq/pmk/mrq IO),
   `kirafrq-audio` (WAV decode and mono 44.1 kHz normalization), `kirafrq-world-binding` (vendored
-  WORLD wrapper), `kirafrq-ml-provider` (model-free resample/grid layer + RMVPE over ONNX
-  Runtime), `kirafrqgen-core` (generation pipeline), `kirafrqgen-cli` / `kirafrqgen-gui`
+  WORLD wrapper), `kirafrq-ml-provider` (model-free resample/grid layer + RMVPE and SwiftF0 over
+  ONNX Runtime), `kirafrqgen-core` (generation pipeline), `kirafrqgen-cli` / `kirafrqgen-gui`
   (the CLI and GUI binaries).
 - `third_party/World` — vendored WORLD v1.0.1 sources, built by `kirafrq-world-binding`'s `cc` build.
 - `.github/workflows/` — CI with one compiler per platform (Windows clang-cl, macOS Apple
