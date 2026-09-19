@@ -52,13 +52,20 @@ impl Estimator {
     pub fn description(self) -> &'static str {
         match self {
             Estimator::Dio => {
-                "Fast, but may struggle on less-than-ideal recordings. \
-                 A traditional DSP-based algorithm from WORLD."
+                "Fast traditional DSP-based algorithm from WORLD, but it may struggle on \
+                 less-than-ideal recordings."
             }
-            Estimator::Harvest => "Robust, but slow. A traditional DSP-based algorithm from WORLD.",
-            Estimator::Rmvpe => "Fast and reliable ML based estimator.",
+            Estimator::Harvest => {
+                "High quality and noise resistant, but very slow. A traditional DSP-based \
+                 algorithm from WORLD."
+            }
+            Estimator::Rmvpe => {
+                "Fast and reliable ML-based estimator, a really good fit for singing material \
+                 such as UTAU voicebanks."
+            }
             Estimator::SwiftF0 => {
-                "Fast and reliable ML based estimator. Comes with a bundled model."
+                "Compact and super fast ML-based estimator. Results are less ideal than RMVPE, \
+                 but still good."
             }
         }
     }
@@ -677,7 +684,45 @@ mod tests {
 
     #[test]
     fn the_rmvpe_description_does_not_mention_a_required_model() {
-        assert!(!Estimator::Rmvpe.description().contains("Requires model"));
+        let description = Estimator::Rmvpe.description();
+        assert!(!description.contains("Requires model"));
+        assert!(description.contains("singing material"));
+    }
+
+    #[test]
+    fn every_estimator_has_a_description() {
+        for estimator in [
+            Estimator::Dio,
+            Estimator::Harvest,
+            Estimator::Rmvpe,
+            Estimator::SwiftF0,
+        ] {
+            assert!(!estimator.description().is_empty());
+        }
+    }
+
+    #[test]
+    fn the_descriptions_match_the_62_wording() {
+        assert_eq!(
+            Estimator::Rmvpe.description(),
+            "Fast and reliable ML-based estimator, a really good fit for singing material \
+             such as UTAU voicebanks."
+        );
+        assert_eq!(
+            Estimator::SwiftF0.description(),
+            "Compact and super fast ML-based estimator. Results are less ideal than RMVPE, \
+             but still good."
+        );
+        assert_eq!(
+            Estimator::Harvest.description(),
+            "High quality and noise resistant, but very slow. A traditional DSP-based \
+             algorithm from WORLD."
+        );
+        assert_eq!(
+            Estimator::Dio.description(),
+            "Fast traditional DSP-based algorithm from WORLD, but it may struggle on \
+             less-than-ideal recordings."
+        );
     }
 
     #[test]
