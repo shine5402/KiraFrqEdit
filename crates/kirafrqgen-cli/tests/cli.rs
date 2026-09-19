@@ -497,18 +497,36 @@ fn progress_is_silent_without_a_tty_and_keeps_stdout_empty() {
 
 // --- ML estimator (#49) -----------------------------------------------------
 
-/// The CLI is spawned without a model file next to it, so `rmvpe` must fail
-/// early with the actionable hint rather than touching any file.
+/// The committed tiny ONNX fixture, copied into `models/rmvpe.onnx`; returns
+/// the directory to point `KIRAFRQ_ML_DIR` at.
+fn fixture_model_dir(scratch: &Scratch) -> String {
+    let model_dir = scratch.dir("models");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("kirafrq-ml-provider")
+            .join("tests")
+            .join("fixtures")
+            .join("rmvpe_tiny.onnx"),
+        model_dir.join("rmvpe.onnx"),
+    )
+    .unwrap();
+    model_dir.to_str().unwrap().to_string()
+}
+
+/// The CLI is spawned without a model file next to it, so modern `rmvpe`
+/// must fail early with the actionable hint rather than touching any file;
+/// the compat build has no `rmvpe` value at all.
 #[test]
 fn rmvpe_without_a_model_errors_with_the_download_hint() {
     let scratch = Scratch::new("rmvpe-missing");
     scratch.write("bank/A2.wav", b"placeholder");
 
     let run = cli(&scratch.0, &["bank", "--estimator", "rmvpe"]);
-    assert_eq!(run.code, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("error:"), "{}", run.stderr);
     assert!(run.stdout_is_empty());
     if cfg!(feature = "ml") {
+        assert_eq!(run.code, 1, "{}", run.stderr);
+        assert!(run.stderr.contains("error:"), "{}", run.stderr);
         assert!(run.stderr.contains("rmvpe.onnx"), "{}", run.stderr);
         assert!(run.stderr.contains("KIRAFRQ_ML_DIR"), "{}", run.stderr);
         assert!(
@@ -516,16 +534,18 @@ fn rmvpe_without_a_model_errors_with_the_download_hint() {
             "the run fails before any write"
         );
     } else {
-        assert!(
-            run.stderr.contains("no ML estimator support"),
-            "{}",
-            run.stderr
-        );
+        assert_eq!(run.code, 2, "a usage error: {}", run.stderr);
+        assert!(run.stderr.contains("invalid value"), "{}", run.stderr);
     }
 }
 
 #[test]
 fn no_world_quirks_with_rmvpe_warns_and_continues() {
+    if !cfg!(feature = "ml") {
+        // The compat build has no `rmvpe` value, so there is nothing to warn
+        // about; the usage error is covered above.
+        return;
+    }
     let scratch = Scratch::new("rmvpe-quirks");
     scratch.write("bank/A2.wav", b"placeholder");
 
@@ -562,13 +582,20 @@ fn no_world_quirks_with_a_world_estimator_is_silent() {
 }
 
 #[test]
-fn help_lists_every_estimator_name() {
+fn help_lists_every_estimator_name_this_build_has() {
     let scratch = Scratch::new("estimator-help");
     let run = cli(&scratch.0, &["--help"]);
     assert_eq!(run.code, 0, "{}", run.stderr);
-    for name in ["dio", "harvest", "rmvpe"] {
+    for name in ["dio", "harvest"] {
         assert!(run.stdout.contains(name), "{name} missing: {}", run.stdout);
     }
+    // #48: the compat build has no ML option, so it must not advertise one.
+    assert_eq!(
+        run.stdout.contains("rmvpe"),
+        cfg!(feature = "ml"),
+        "{}",
+        run.stdout
+    );
     assert!(run.stderr.is_empty(), "help goes to stdout: {}", run.stderr);
 }
 
@@ -582,18 +609,7 @@ fn rmvpe_runs_end_to_end_with_the_committed_fixture() {
     }
     let scratch = Scratch::new("rmvpe-fixture");
     write_tone(&scratch, "bank/A2.wav");
-    let model_dir = scratch.dir("models");
-    fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("kirafrq-ml-provider")
-            .join("tests")
-            .join("fixtures")
-            .join("rmvpe_tiny.onnx"),
-        model_dir.join("rmvpe.onnx"),
-    )
-    .unwrap();
-    let model_dir = model_dir.to_str().unwrap().to_string();
+    let model_dir = fixture_model_dir(&scratch);
 
     let run = cli_with_env(
         &scratch.0,
@@ -617,61 +633,53 @@ fn rmvpe_runs_end_to_end_with_the_committed_fixture() {
 /// DIO otherwise (#49); an explicit choice always wins.
 #[test]
 fn the_default_estimator_is_capability_aware() {
+    if !cfg!(feature = "ml") {
+        // The compat build has no ML tier, so the default is DIO by
+        // construction and there is nothing model-dependent to exercise.
+        return;
+    }
     let scratch = Scratch::new("default-estimator");
     write_tone(&scratch, "bank/A2.wav");
-    let model_dir = scratch.dir("models");
-    fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("kirafrq-ml-provider")
-            .join("tests")
-            .join("fixtures")
-            .join("rmvpe_tiny.onnx"),
-        model_dir.join("rmvpe.onnx"),
-    )
-    .unwrap();
-    let model_dir = model_dir.to_str().unwrap().to_string();
+    let model_dir = fixture_model_dir(&scratch);
 
-    if cfg!(feature = "ml") {
-        // With the model available the default run must use it. The fixture's
-        // f0 values (~441.5 / ~220.4 Hz alternating) are not what DIO finds on
-        // the 220 Hz tone, so the two tables must differ.
-        let with_model = run_ok_with_env(
-            &scratch.0,
-            &["bank", "-v"],
-            &[("KIRAFRQ_ML_DIR", &model_dir)],
-        );
-        assert!(
-            with_model.stderr.contains("wrote frq"),
-            "{}",
-            with_model.stderr
-        );
-        let default_table = frq::read(&scratch.path("bank/A2_wav.frq")).unwrap();
+    // With the model available the default run must use it. The fixture's
+    // f0 values (~441.5 / ~220.4 Hz alternating) are not what DIO finds on
+    // the 220 Hz tone, so the two tables must differ.
+    let with_model = run_ok_with_env(
+        &scratch.0,
+        &["bank", "-v"],
+        &[("KIRAFRQ_ML_DIR", &model_dir)],
+    );
+    assert!(
+        with_model.stderr.contains("wrote frq"),
+        "{}",
+        with_model.stderr
+    );
+    let default_table = frq::read(&scratch.path("bank/A2_wav.frq")).unwrap();
 
-        // An explicit `--estimator dio` still wins with the model present.
-        let explicit = run_ok_with_env(
-            &scratch.0,
-            &["bank", "--overwrite", "--estimator", "dio"],
-            &[("KIRAFRQ_ML_DIR", &model_dir)],
-        );
-        assert!(explicit.stderr.contains("written 1"), "{}", explicit.stderr);
-        let dio_table = frq::read(&scratch.path("bank/A2_wav.frq")).unwrap();
+    // An explicit `--estimator dio` still wins with the model present.
+    let explicit = run_ok_with_env(
+        &scratch.0,
+        &["bank", "--overwrite", "--estimator", "dio"],
+        &[("KIRAFRQ_ML_DIR", &model_dir)],
+    );
+    assert!(explicit.stderr.contains("written 1"), "{}", explicit.stderr);
+    let dio_table = frq::read(&scratch.path("bank/A2_wav.frq")).unwrap();
 
-        assert_ne!(
-            default_table.f0_hz, dio_table.f0_hz,
-            "the default must have used RMVPE, not DIO"
-        );
-        let fixture_voiced: Vec<f64> = default_table
-            .f0_hz
-            .iter()
-            .copied()
-            .filter(|&value| value > 0.0)
-            .collect();
-        assert!(
-            fixture_voiced.iter().any(|&value| value > 400.0),
-            "the fixture's ~441.5 Hz slot must appear: {fixture_voiced:?}"
-        );
-    }
+    assert_ne!(
+        default_table.f0_hz, dio_table.f0_hz,
+        "the default must have used RMVPE, not DIO"
+    );
+    let fixture_voiced: Vec<f64> = default_table
+        .f0_hz
+        .iter()
+        .copied()
+        .filter(|&value| value > 0.0)
+        .collect();
+    assert!(
+        fixture_voiced.iter().any(|&value| value > 400.0),
+        "the fixture's ~441.5 Hz slot must appear: {fixture_voiced:?}"
+    );
 }
 
 fn run_ok_with_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Run {

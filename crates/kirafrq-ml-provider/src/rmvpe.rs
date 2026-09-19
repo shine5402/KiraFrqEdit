@@ -10,10 +10,7 @@
 //!   `+/-4` bins around the argmax, confidence is the peak salience.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
 
-use ort::session::Session;
-use ort::session::builder::GraphOptimizationLevel;
 use ort::value::Tensor;
 
 use crate::grid::{NativeContour, RMVPE_CONTRACT, Track, map_to_table_grid};
@@ -32,14 +29,15 @@ const DECODER_HALF_WINDOW: usize = 4;
 /// Progress ticks per estimate: resample, inference, decode, map.
 const PROGRESS_TICKS: usize = 4;
 
-/// The RMVPE estimator: one session per process, built lazily behind a mutex.
+/// The RMVPE estimator. The ONNX Runtime session is a process-wide,
+/// lazily-built singleton ([`session`]) so every run in one process reuses
+/// the loaded model.
 pub struct Rmvpe {
     model_path: PathBuf,
     policy: UvPolicy,
     /// `intra_op_num_threads`; `0` leaves ONNX Runtime's default (physical
     /// cores). Clamped against the machine when the session is built.
     jobs: usize,
-    session: Mutex<Option<Session>>,
 }
 
 impl Rmvpe {
@@ -50,8 +48,14 @@ impl Rmvpe {
             model_path,
             policy,
             jobs,
-            session: Mutex::new(None),
         }
+    }
+
+    /// Build the process session now if it is not built yet. A model that
+    /// cannot be loaded then fails at configuration time (#49) instead of on
+    /// the first file.
+    pub fn ensure_session(&self) -> Result<(), Error> {
+        session::with(&self.model_path, self.jobs, |_| Ok(()))
     }
 
     /// Estimate f0 for mono 44.1 kHz `samples` and map it onto the table grid
@@ -115,58 +119,100 @@ impl Rmvpe {
         self.infer(audio_16k)
     }
 
-    /// Run the session over a padded `[1, 128, T_pad]` log-mel input and
-    /// return the first `frames` rows of the `[1, T_pad, 360]` salience.
+    /// Run the process session over a padded `[1, 128, T_pad]` log-mel input
+    /// and return the first `frames` rows of the `[1, T_pad, 360]` salience.
     fn run_session(&self, mel: &[f32], frames: usize) -> Result<Vec<f32>, Error> {
-        let mut guard = self
-            .session
+        session::with(&self.model_path, self.jobs, |session| {
+            let padded = mel.len() / crate::mel::N_MELS;
+            let input = Tensor::from_array((
+                [1_i64, crate::mel::N_MELS as i64, padded as i64],
+                mel.to_vec().into_boxed_slice(),
+            ))
+            .map_err(ort_error)?;
+            let outputs = session
+                .run(ort::inputs![input])
+                .map_err(|error| Error::Ort(format!("RMVPE inference failed: {error}")))?;
+            let (shape, salience) = outputs[0].try_extract_tensor::<f32>().map_err(|error| {
+                Error::Ort(format!("RMVPE output is not an f32 tensor: {error}"))
+            })?;
+
+            let shape: Vec<usize> = shape.iter().map(|&dim| dim as usize).collect();
+            if shape.len() != 3 || shape[0] != 1 || shape[2] != N_BINS || shape[1] < frames {
+                return Err(Error::Ort(format!(
+                    "RMVPE output shape {shape:?} is not [1, >= {frames}, {N_BINS}]"
+                )));
+            }
+            Ok(salience[..frames * N_BINS].to_vec())
+        })
+    }
+}
+
+/// The process-wide session: one ONNX Runtime session, built lazily behind a
+/// mutex and rebuilt only when the model path or thread count changes (#48).
+mod session {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, MutexGuard};
+
+    use ort::session::Session;
+    use ort::session::builder::GraphOptimizationLevel;
+
+    use super::{intra_op_threads, ort_error};
+    use crate::Error;
+
+    struct Cached {
+        model_path: PathBuf,
+        jobs: usize,
+        session: Session,
+    }
+
+    static SESSION: Mutex<Option<Cached>> = Mutex::new(None);
+
+    /// Run `f` against the session for `(model_path, jobs)`, building or
+    /// rebuilding it first when needed.
+    pub(super) fn with<R>(
+        model_path: &Path,
+        jobs: usize,
+        f: impl FnOnce(&mut Session) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        let mut guard: MutexGuard<'_, Option<Cached>> = SESSION
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if guard.is_none() {
-            *guard = Some(self.build_session()?);
+        let stale = guard
+            .as_ref()
+            .is_none_or(|cached| cached.model_path != model_path || cached.jobs != jobs);
+        if stale {
+            *guard = Some(build(model_path, jobs)?);
         }
-        let session = guard.as_mut().expect("just built");
-
-        let padded = mel.len() / crate::mel::N_MELS;
-        let input = Tensor::from_array((
-            [1_i64, crate::mel::N_MELS as i64, padded as i64],
-            mel.to_vec().into_boxed_slice(),
-        ))
-        .map_err(ort_error)?;
-        let outputs = session
-            .run(ort::inputs![input])
-            .map_err(|error| Error::Ort(format!("RMVPE inference failed: {error}")))?;
-        let (shape, salience) = outputs[0]
-            .try_extract_tensor::<f32>()
-            .map_err(|error| Error::Ort(format!("RMVPE output is not an f32 tensor: {error}")))?;
-
-        let shape: Vec<usize> = shape.iter().map(|&dim| dim as usize).collect();
-        if shape.len() != 3 || shape[0] != 1 || shape[2] != N_BINS || shape[1] < frames {
-            return Err(Error::Ort(format!(
-                "RMVPE output shape {shape:?} is not [1, >= {frames}, {N_BINS}]"
-            )));
-        }
-        Ok(salience[..frames * N_BINS].to_vec())
+        let cached = guard.as_mut().expect("just built");
+        f(&mut cached.session)
     }
 
     /// Build the session: static ONNX Runtime, graph optimization at the
     /// default level, `inter_op = 1`, `jobs` into the intra-op pool.
-    fn build_session(&self) -> Result<Session, Error> {
+    fn build(model_path: &Path, jobs: usize) -> Result<Cached, Error> {
         let mut builder = Session::builder().map_err(ort_error)?;
         builder = builder
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(ort_error)?;
         builder = builder.with_inter_threads(1).map_err(ort_error)?;
-        if self.jobs > 0 {
+        if jobs > 0 {
             builder = builder
-                .with_intra_threads(intra_op_threads(self.jobs))
+                .with_intra_threads(intra_op_threads(jobs))
                 .map_err(ort_error)?;
         }
-        builder.commit_from_file(&self.model_path).map_err(|error| {
-            Error::Ort(format!(
-                "cannot load {}: {error}",
-                self.model_path.display()
-            ))
+        let session = builder.commit_from_file(model_path).map_err(|error| {
+            Error::Ort(format!("cannot load {}: {error}", model_path.display()))
+        })?;
+        if session.inputs().is_empty() || session.outputs().is_empty() {
+            return Err(Error::Ort(format!(
+                "{} has no input or output tensor",
+                model_path.display()
+            )));
+        }
+        Ok(Cached {
+            model_path: model_path.to_path_buf(),
+            jobs,
+            session,
         })
     }
 }
@@ -265,5 +311,51 @@ mod tests {
     fn an_all_zero_row_is_unvoiced_and_finite() {
         let f0 = decode_salience(&vec![0.0_f32; N_BINS], 1, &UvPolicy::rmvpe(None));
         assert_eq!(f0, vec![0.0]);
+    }
+
+    #[test]
+    fn a_single_voiced_native_frame_never_voices_a_table_frame() {
+        // #53 criterion 6, end to end through the decoder and the #47
+        // mapper: frame 1 is voiced, frames 0 and 2 are not, so no table
+        // frame's bracket is fully voiced.
+        let mut salience = vec![0.0_f32; 3 * N_BINS];
+        salience[N_BINS + 228] = 1.0;
+        let native = decode_salience(&salience, 3, &UvPolicy::rmvpe(None));
+        assert!(native[1] > 0.0, "the middle native frame is voiced");
+        let track = map_to_table_grid(
+            &NativeContour {
+                contract: RMVPE_CONTRACT,
+                f0_hz: native,
+            },
+            2048,
+        );
+        assert!(
+            track.f0_hz.iter().all(|&value| value == 0.0),
+            "{:?}",
+            track.f0_hz
+        );
+    }
+
+    #[test]
+    fn an_all_below_threshold_stream_is_all_unvoiced() {
+        // #53 criterion 4 at the provider level: with every peak under the
+        // threshold the decoded contour and the mapped track are all `0.0`.
+        let rows = 4;
+        let mut salience = vec![0.0_f32; rows * N_BINS];
+        for row in 0..rows {
+            salience[row * N_BINS + 228] = 0.01;
+        }
+        let policy = UvPolicy::rmvpe(Some(0.03));
+        let native = decode_salience(&salience, rows, &policy);
+        assert_eq!(native, vec![0.0; rows]);
+
+        let track = map_to_table_grid(
+            &NativeContour {
+                contract: RMVPE_CONTRACT,
+                f0_hz: native,
+            },
+            2048,
+        );
+        assert_eq!(track.f0_hz, vec![0.0; 9]);
     }
 }

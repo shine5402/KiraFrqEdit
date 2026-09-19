@@ -13,12 +13,19 @@ use std::sync::Arc;
 use realfft::RealFftPlanner;
 use realfft::num_complex::Complex32;
 
+/// The model's frame rate, from the RMVPE contract.
 pub const SAMPLE_RATE: u32 = 16_000;
+/// STFT size, `n_fft = 1024` in RVC's frontend.
 pub const N_FFT: usize = 1024;
+/// Hop between frames, 160 samples (10 ms at [`SAMPLE_RATE`]).
 pub const HOP: usize = 160;
+/// Mel bands the RMVPE graph expects.
 pub const N_MELS: usize = 128;
+/// Lowest mel filter edge, Hz.
 pub const FMIN_HZ: f64 = 30.0;
+/// Highest mel filter edge, Hz.
 pub const FMAX_HZ: f64 = 8000.0;
+/// Lower clamp before the log, matching RVC's `clamp=1e-5`.
 pub const MEL_CLAMP: f32 = 1e-5;
 
 /// Zero-pad the mel to the next multiple of 32 frames (at least 32), the
@@ -37,6 +44,7 @@ pub struct Frontend {
 }
 
 impl Frontend {
+    /// The frontend with its FFT plan, window and filterbank ready.
     pub fn new() -> Self {
         let mut planner = RealFftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(N_FFT);

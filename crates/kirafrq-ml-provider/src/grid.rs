@@ -9,12 +9,8 @@
 
 /// Every UTAU table format shares the 44.1 kHz, 256-sample hop (#7).
 pub const TABLE_SAMPLE_RATE: u32 = 44_100;
+/// Frames are 256 samples apart at 44.1 kHz, the 5.805 ms table grid.
 pub const TABLE_HOP_SAMPLES: usize = 256;
-
-/// The table frame period in milliseconds (`256 / 44100 s`, 5.805 ms).
-pub fn table_frame_period_ms() -> f64 {
-    TABLE_HOP_SAMPLES as f64 / TABLE_SAMPLE_RATE as f64 * 1000.0
-}
 
 /// The exact frame count #8 guarantees for a `L`-sample 44.1 kHz wav:
 /// `N = floor(L / 256) + 1`.
@@ -60,6 +56,36 @@ pub struct NativeContour {
     pub f0_hz: Vec<f64>,
 }
 
+impl NativeContour {
+    /// The #47 interpolation rule at time `t`, in seconds: `t` is voiced iff
+    /// its two bracketing native frames are both voiced; the value is linear
+    /// in Hz between them. `t` before the first or after the last native
+    /// frame has no bracket and is unvoiced.
+    fn value_at(&self, t: f64) -> f64 {
+        let values = &self.f0_hz;
+        let hop_s = self.contract.frame_period_s();
+        if values.len() < 2 || !(hop_s.is_finite() && hop_s > 0.0) || !t.is_finite() {
+            return 0.0;
+        }
+
+        let position = ((t - self.contract.origin_s) / hop_s).floor();
+        if !position.is_finite() || position < 0.0 {
+            return 0.0;
+        }
+        let frame = position as usize;
+        let (Some(&left), Some(&right)) = (values.get(frame), values.get(frame + 1)) else {
+            return 0.0;
+        };
+        if !voiced(left) || !voiced(right) {
+            return 0.0;
+        }
+
+        let left_time = self.contract.frame_time_s(frame);
+        let weight = (t - left_time) / hop_s;
+        left + (right - left) * weight
+    }
+}
+
 /// An f0 track on the table grid; the same shape `kirafrqgen-core`'s
 /// `F0Track` has, without depending on it.
 #[derive(Debug, Clone, PartialEq)]
@@ -80,7 +106,7 @@ pub fn map_to_table_grid(native: &NativeContour, input_len_44100: usize) -> Trac
     let period_s = TABLE_HOP_SAMPLES as f64 / TABLE_SAMPLE_RATE as f64;
 
     let f0_hz: Vec<f64> = (0..frames)
-        .map(|frame| interpolate(native, frame as f64 * period_s))
+        .map(|frame| native.value_at(frame as f64 * period_s))
         .collect();
 
     Track {
@@ -88,34 +114,6 @@ pub fn map_to_table_grid(native: &NativeContour, input_len_44100: usize) -> Trac
         temporal_positions: (0..frames).map(|frame| frame as f64 * period_s).collect(),
         f0_hz,
     }
-}
-
-/// The #47 interpolation rule at time `t`, in seconds. `t` is voiced iff its
-/// two bracketing native frames are both voiced; the value is linear in Hz
-/// between them. `t` before the first or after the last native frame has no
-/// bracket and is unvoiced.
-fn interpolate(native: &NativeContour, t: f64) -> f64 {
-    let values = &native.f0_hz;
-    let hop_s = native.contract.frame_period_s();
-    if values.len() < 2 || !(hop_s.is_finite() && hop_s > 0.0) || !t.is_finite() {
-        return 0.0;
-    }
-
-    let position = ((t - native.contract.origin_s) / hop_s).floor();
-    if !position.is_finite() || position < 0.0 {
-        return 0.0;
-    }
-    let frame = position as usize;
-    let (Some(&left), Some(&right)) = (values.get(frame), values.get(frame + 1)) else {
-        return 0.0;
-    };
-    if !voiced(left) || !voiced(right) {
-        return 0.0;
-    }
-
-    let left_time = native.contract.frame_time_s(frame);
-    let weight = (t - left_time) / hop_s;
-    left + (right - left) * weight
 }
 
 /// Unvoiced is `0.0`; any non-finite or non-positive value reads unvoiced.

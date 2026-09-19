@@ -22,8 +22,8 @@ pub struct Cli {
     #[arg(long, value_delimiter = ',', value_name = "FORMAT")]
     pub format: Vec<FormatArg>,
 
-    /// f0 estimator for every wav. Defaults to rmvpe when a model is present
-    /// in an ML-enabled build, else dio.
+    /// f0 estimator for every wav. Defaults to the ML estimator when this
+    /// build has ML support and a model file is present, else dio.
     #[arg(long, value_enum)]
     pub estimator: Option<EstimatorArg>,
 
@@ -99,11 +99,7 @@ impl Cli {
             return explicit.into();
         }
         let default = F0Config::default();
-        if kirafrqgen_core::ml_available(&default) {
-            Estimator::Rmvpe
-        } else {
-            Estimator::Dio
-        }
+        kirafrqgen_core::default_estimator(kirafrqgen_core::ml_available(&default))
     }
 
     /// The explicit `.llsm` flags as a value; `None` when neither was passed,
@@ -136,22 +132,45 @@ impl From<FormatArg> for Target {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// The `--estimator` value: the WORLD pair always, RMVPE only in an
+/// ML-enabled build (#48: the compat build has no ML option).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EstimatorArg {
-    /// Fast, but may struggle on less-than-ideal recordings. A traditional
-    /// DSP-based algorithm from WORLD.
     Dio,
-    /// Robust, but slow. A traditional DSP-based algorithm from WORLD.
     Harvest,
-    /// Fast and reliable ML based estimator. Requires model to be present.
+    #[cfg(feature = "ml")]
     Rmvpe,
+}
+
+impl clap::ValueEnum for EstimatorArg {
+    fn value_variants<'a>() -> &'a [Self] {
+        #[cfg(feature = "ml")]
+        {
+            &[Self::Dio, Self::Harvest, Self::Rmvpe]
+        }
+        #[cfg(not(feature = "ml"))]
+        {
+            &[Self::Dio, Self::Harvest]
+        }
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        let name = match self {
+            EstimatorArg::Dio => "dio",
+            EstimatorArg::Harvest => "harvest",
+            #[cfg(feature = "ml")]
+            EstimatorArg::Rmvpe => "rmvpe",
+        };
+        Some(clap::builder::PossibleValue::new(name).help(Estimator::from(*self).description()))
+    }
 }
 
 impl From<EstimatorArg> for Estimator {
     fn from(value: EstimatorArg) -> Self {
         match value {
-            EstimatorArg::Harvest => Estimator::Harvest,
             EstimatorArg::Dio => Estimator::Dio,
+            EstimatorArg::Harvest => Estimator::Harvest,
+            #[cfg(feature = "ml")]
             EstimatorArg::Rmvpe => Estimator::Rmvpe,
         }
     }
@@ -236,6 +255,7 @@ mod tests {
             parse_ok(&["bank", "--estimator", "harvest"]).estimator,
             Some(EstimatorArg::Harvest)
         );
+        #[cfg(feature = "ml")]
         assert_eq!(
             parse_ok(&["bank", "--estimator", "rmvpe"]).estimator,
             Some(EstimatorArg::Rmvpe)
@@ -245,9 +265,26 @@ mod tests {
     }
 
     #[test]
+    fn the_compat_build_rejects_rmvpe_as_a_usage_error() {
+        // #48: the compat build has no ML option at all.
+        #[cfg(not(feature = "ml"))]
+        {
+            let error = parse(&["bank", "--estimator", "rmvpe"]).unwrap_err();
+            assert_eq!(error.exit_code(), 2);
+        }
+        #[cfg(feature = "ml")]
+        {
+            assert!(
+                parse_ok(&["bank", "--estimator", "rmvpe"])
+                    .estimator
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
     fn an_explicit_estimator_always_wins_over_the_default() {
-        // The capability-aware default (#49) resolves to DIO here (no model
-        // in the test environment); an explicit flag must beat it.
+        #[cfg(feature = "ml")]
         assert_eq!(
             parse_ok(&["bank", "--estimator", "rmvpe"]).estimator(),
             Estimator::Rmvpe
@@ -255,6 +292,10 @@ mod tests {
         assert_eq!(
             parse_ok(&["bank", "--estimator", "harvest"]).estimator(),
             Estimator::Harvest
+        );
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "dio"]).estimator(),
+            Estimator::Dio
         );
     }
 

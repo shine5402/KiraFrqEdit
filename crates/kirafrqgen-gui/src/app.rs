@@ -170,21 +170,11 @@ impl Progress for GuiProgress {
     }
 }
 
-/// The capability-aware default (#49): RMVPE when a model is available, else
-/// DIO. Kept pure so the choice is testable without a model file.
-fn default_estimator(ml_available: bool) -> Estimator {
-    if ml_available {
-        Estimator::Rmvpe
-    } else {
-        Estimator::Dio
-    }
-}
-
 pub struct KiraFrqGenApp {
     // Options (session-only).
     estimator: Estimator,
-    /// The capability-aware default resolved once at startup (#49): RMVPE
-    /// when a model file is available, else DIO.
+    /// Whether the ML tier can run; resolves the capability-aware default
+    /// once at startup (#49) and greys the RMVPE radio when false.
     ml_available: bool,
     world_quirks: bool,
     targets: Targets,
@@ -215,7 +205,7 @@ impl KiraFrqGenApp {
             .unwrap_or(4);
         let ml_available = ml_available(&F0Config::default());
         Self {
-            estimator: default_estimator(ml_available),
+            estimator: kirafrqgen_core::default_estimator(ml_available),
             ml_available,
             world_quirks: true,
             targets: Targets {
@@ -246,12 +236,6 @@ impl KiraFrqGenApp {
 
     fn is_running(&self) -> bool {
         self.run_state().is_some_and(|state| state.is_running())
-    }
-
-    /// Whether the selected estimator is one of the WORLD pair: the WORLD
-    /// quirks toggle applies to those only (#49).
-    fn is_world_estimator(&self) -> bool {
-        matches!(self.estimator, Estimator::Dio | Estimator::Harvest)
     }
 
     fn run_ended(&self) -> bool {
@@ -409,37 +393,28 @@ impl KiraFrqGenApp {
             ui.horizontal(|ui| {
                 ui.radio_value(&mut self.estimator, Estimator::Harvest, "Harvest");
                 ui.radio_value(&mut self.estimator, Estimator::Dio, "DIO");
-                let rmvpe = ui.add_enabled(
-                    self.ml_available,
-                    egui::RadioButton::new(self.estimator == Estimator::Rmvpe, "RMVPE"),
-                );
-                if rmvpe.clicked() {
-                    self.estimator = Estimator::Rmvpe;
-                }
-                if !self.ml_available {
-                    rmvpe.on_hover_text(
-                        "RMVPE needs a model file. Put `rmvpe.onnx` next to the executable \
-                         or in the directory named by KIRAFRQ_ML_DIR, then restart.",
+                // #48: the compat build has no ML option at all.
+                if cfg!(feature = "ml") {
+                    let rmvpe = ui.add_enabled(
+                        self.ml_available,
+                        egui::RadioButton::new(self.estimator == Estimator::Rmvpe, "RMVPE"),
                     );
+                    if rmvpe.clicked() {
+                        self.estimator = Estimator::Rmvpe;
+                    }
+                    if !self.ml_available {
+                        rmvpe.on_hover_text(
+                            "RMVPE needs a model file. Put `rmvpe.onnx` next to the executable \
+                             or in the directory named by KIRAFRQ_ML_DIR, then restart.",
+                        );
+                    }
                 }
             });
-            let description = match self.estimator {
-                Estimator::Harvest => {
-                    "Robust, but slow. A traditional DSP-based algorithm from WORLD."
-                }
-                Estimator::Dio => {
-                    "Fast, but may struggle on less-than-ideal recordings. \
-                     A traditional DSP-based algorithm from WORLD."
-                }
-                Estimator::Rmvpe => {
-                    "Fast and reliable ML based estimator. Requires model to be present."
-                }
-            };
-            ui.label(RichText::new(description).weak());
+            ui.label(RichText::new(self.estimator.description()).weak());
 
             ui.add_space(8.0);
             let quirks = ui.add_enabled(
-                self.is_world_estimator(),
+                self.estimator.is_world(),
                 egui::Checkbox::new(&mut self.world_quirks, "WORLD quirks"),
             );
             quirks.on_hover_text(
@@ -1327,8 +1302,8 @@ mod tests {
 
     #[test]
     fn the_default_estimator_follows_the_ml_capability() {
-        assert_eq!(default_estimator(true), Estimator::Rmvpe);
-        assert_eq!(default_estimator(false), Estimator::Dio);
+        assert_eq!(kirafrqgen_core::default_estimator(true), Estimator::Rmvpe);
+        assert_eq!(kirafrqgen_core::default_estimator(false), Estimator::Dio);
     }
 
     #[test]

@@ -25,11 +25,12 @@ outputs wrong pitch, glitches and pops.
 
 ## Status
 
-- 2026-09: research phase done; workspace scaffold landed (#15): five crates under `crates/`,
+- 2026-09: research phase done; workspace scaffold landed (#15): six crates under `crates/`,
   WORLD vendored under `third_party/World`, per-platform compiler CI (clang-cl / Apple clang /
   gcc) and tag-triggered CD under
   `.github/workflows/`. The core formats, WAV normalization, the generation pipeline, the CLI and
-  the GUI (#23) have landed; next is end-to-end validation (#22).
+  the GUI (#23), and the selectable ML tier (RMVPE via `kirafrq-ml-provider`, #57) have landed;
+  next is end-to-end validation (#22).
 - Research results live in `docs/research/` (README is the index); format specs were verified
   against real files from the local UTAU corpus where possible.
 
@@ -37,7 +38,8 @@ outputs wrong pitch, glitches and pops.
 
 - `crates/` — the Cargo workspace: `kirafrq-formats` (neutral `FrequencyTable` + frq/pmk/mrq IO),
   `kirafrq-audio` (WAV decode and mono 44.1 kHz normalization), `kirafrq-world-binding` (vendored
-  WORLD wrapper), `kirafrqgen-core` (generation pipeline), `kirafrqgen-cli` / `kirafrqgen-gui`
+  WORLD wrapper), `kirafrq-ml-provider` (model-free resample/grid layer + RMVPE over ONNX
+  Runtime), `kirafrqgen-core` (generation pipeline), `kirafrqgen-cli` / `kirafrqgen-gui`
   (the CLI and GUI binaries).
 - `third_party/World` — vendored WORLD v1.0.1 sources, built by `kirafrq-world-binding`'s `cc` build.
 - `.github/workflows/` — CI with one compiler per platform (Windows clang-cl, macOS Apple

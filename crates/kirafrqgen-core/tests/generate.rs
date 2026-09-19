@@ -1085,6 +1085,97 @@ fn the_ml_capability_predicates_are_consistent() {
     assert!(!kirafrqgen_core::ml_available(&missing));
 }
 
+/// The committed tiny ONNX fixture (`rmvpe_tiny.onnx`) with RMVPE's I/O
+/// contract, for the ML end-to-end tests; no real model in CI.
+#[cfg(feature = "ml")]
+fn ml_fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("kirafrq-ml-provider")
+        .join("tests")
+        .join("fixtures")
+        .join("rmvpe_tiny.onnx")
+}
+
+#[cfg(feature = "ml")]
+#[test]
+fn an_ml_confidence_override_above_every_peak_unvoices_the_whole_file() {
+    // #53 criterion 4 end to end: all peaks are below the threshold, so the
+    // table is all-unvoiced and its key is `0.0`.
+    let scratch = Scratch::new("ml-all-unvoiced");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1024]);
+
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.estimator = kirafrqgen_core::Estimator::Rmvpe;
+    opts.f0.ml = kirafrqgen_core::MlConfig {
+        model_path: Some(ml_fixture()),
+        confidence_threshold: Some(2.0),
+    };
+    let estimator = kirafrqgen_core::build_estimator(&opts.f0, 1).unwrap();
+    run(&opts, estimator.as_ref());
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz, vec![0.0; 5], "all-unvoiced");
+    assert_eq!(table.key_hz, 0.0);
+}
+
+#[cfg(feature = "ml")]
+#[test]
+fn the_ml_fixture_writes_a_conforming_table() {
+    // The factory + pipeline path with the fixture: the #8 conventions hold
+    // and the fixture's ~441.5 Hz slot reaches the table.
+    let scratch = Scratch::new("ml-fixture");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1024]);
+
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.estimator = kirafrqgen_core::Estimator::Rmvpe;
+    opts.f0.ml = kirafrqgen_core::MlConfig {
+        model_path: Some(ml_fixture()),
+        confidence_threshold: None,
+    };
+    let estimator = kirafrqgen_core::build_estimator(&opts.f0, 1).unwrap();
+    assert!(!estimator.supports_stonemask(), "ML never refines");
+    run(&opts, estimator.as_ref());
+
+    let table = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+    assert_eq!(table.f0_hz.len(), 5);
+    assert_eq!(*table.f0_hz.last().unwrap(), 0.0, "the trailing rule");
+    let voiced: Vec<f64> = table
+        .f0_hz
+        .iter()
+        .copied()
+        .filter(|&value| value > 0.0)
+        .collect();
+    assert!(!voiced.is_empty(), "{:?}", table.f0_hz);
+    assert!(
+        voiced.iter().any(|&value| (400.0..500.0).contains(&value)),
+        "the fixture's ~441.5 Hz slot: {voiced:?}"
+    );
+}
+
+#[cfg(feature = "ml")]
+#[test]
+fn an_unloadable_ml_model_is_an_early_config_error() {
+    // #49: a model file that exists but cannot be loaded fails at the factory,
+    // before any file is touched.
+    let scratch = Scratch::new("ml-unloadable");
+    let broken = scratch.join("broken.onnx");
+    fs::write(&broken, b"not an onnx graph").unwrap();
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.f0.estimator = kirafrqgen_core::Estimator::Rmvpe;
+    opts.f0.ml = kirafrqgen_core::MlConfig {
+        model_path: Some(broken),
+        confidence_threshold: None,
+    };
+    match kirafrqgen_core::build_estimator(&opts.f0, 1) {
+        Err(GeneratorError::Config(message)) => {
+            assert!(message.contains("broken.onnx"), "{message}");
+        }
+        Err(other) => panic!("expected a config error, got {other}"),
+        Ok(_) => panic!("expected a config error, got an estimator"),
+    }
+}
+
 // --- energy voicing gate (#54) ----------------------------------------------
 
 /// 1024 samples: loud, i16 33, loud, loud, empty — frq amplitudes

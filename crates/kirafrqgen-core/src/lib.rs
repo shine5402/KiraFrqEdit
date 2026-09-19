@@ -40,6 +40,40 @@ pub enum Estimator {
     Rmvpe,
 }
 
+impl Estimator {
+    /// Whether this is one of the WORLD DSP estimators. The energy voicing
+    /// gate (#54) is a WORLD workaround, so it applies to those only (#53).
+    pub fn is_world(self) -> bool {
+        matches!(self, Estimator::Dio | Estimator::Harvest)
+    }
+
+    /// The user-facing one-liner the front ends show for this estimator
+    /// (wording fixed in #49).
+    pub fn description(self) -> &'static str {
+        match self {
+            Estimator::Dio => {
+                "Fast, but may struggle on less-than-ideal recordings. \
+                 A traditional DSP-based algorithm from WORLD."
+            }
+            Estimator::Harvest => "Robust, but slow. A traditional DSP-based algorithm from WORLD.",
+            Estimator::Rmvpe => {
+                "Fast and reliable ML based estimator. Requires model to be present."
+            }
+        }
+    }
+}
+
+/// The capability-aware default (#49): RMVPE when the ML tier is available,
+/// else DIO. The front ends resolve this once at startup; an explicit choice
+/// always wins.
+pub fn default_estimator(ml_available: bool) -> Estimator {
+    if ml_available {
+        Estimator::Rmvpe
+    } else {
+        Estimator::Dio
+    }
+}
+
 /// ML estimator settings (#48): the model file and the confidence threshold.
 /// Non-`Copy` because the path is owned; the pipeline keeps it in
 /// [`GenerateOptions`] and hands a clone to the provider.
@@ -305,10 +339,13 @@ fn build_ml_estimator(
         floor_hz: config.floor_hz,
         ceiling_hz: config.ceiling_hz,
     };
-    Ok(Box::new(MlEstimator {
-        inner: kirafrq_ml_provider::rmvpe::Rmvpe::new(model_path.clone(), policy, jobs),
-        model_path,
-    }))
+    let inner = kirafrq_ml_provider::rmvpe::Rmvpe::new(model_path.clone(), policy, jobs);
+    // Load the session now so an unloadable model is the same early config
+    // error as a missing one (#49), not a per-file failure.
+    inner
+        .ensure_session()
+        .map_err(|error| GeneratorError::Config(format!("{error}; {ML_DOWNLOAD_HINT}")))?;
+    Ok(Box::new(MlEstimator { inner, model_path }))
 }
 
 #[cfg(not(feature = "ml"))]
@@ -335,6 +372,9 @@ pub const ML_SUPPORTED: bool = cfg!(feature = "ml");
 /// resolves. Used by the front ends to pick the capability-aware default
 /// (#49) and to grey the option out.
 pub fn ml_available(config: &F0Config) -> bool {
+    if !ML_SUPPORTED {
+        return false;
+    }
     match &config.ml.model_path {
         Some(path) => path.is_file(),
         None => {
