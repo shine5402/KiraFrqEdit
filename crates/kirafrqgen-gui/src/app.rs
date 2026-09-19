@@ -195,10 +195,11 @@ pub struct KiraFrqGenApp {
     /// (#32); an unavailable clipboard disables its Paste item.
     clipboard: PathClipboard,
 
-    /// The Help > Credits window: whether it is open and whether it shows the
-    /// full license texts (the default).
+    /// The Help > Credits window: whether it is open, whether it shows the
+    /// full license texts (the default), and the rendered text it displays.
     credits_open: bool,
     credits_full: bool,
+    credits_text: String,
 
     run: Option<RunSession>,
 }
@@ -233,6 +234,7 @@ impl KiraFrqGenApp {
             clipboard: PathClipboard::default(),
             credits_open: false,
             credits_full: true,
+            credits_text: String::new(),
             run: None,
         }
     }
@@ -343,6 +345,15 @@ impl KiraFrqGenApp {
         }
     }
 
+    /// Re-render the credits for the current full/compact choice, so the window
+    /// pays the markdown render once instead of every frame.
+    fn refresh_credits(&mut self) {
+        self.credits_text = kirafrq_credits::render(
+            kirafrq_credits::for_display(self.credits_full),
+            kirafrq_credits::Style::Plain,
+        );
+    }
+
     /// The Help > Credits window.
     fn credits_window(&mut self, ctx: &egui::Context) {
         if !self.credits_open {
@@ -354,13 +365,17 @@ impl KiraFrqGenApp {
             .default_size([640.0, 480.0])
             .resizable(true)
             .show(ctx, |ui| {
-                ui.checkbox(&mut self.credits_full, "Show full license texts");
-                let credits = kirafrq_credits::for_display(self.credits_full);
+                if ui
+                    .checkbox(&mut self.credits_full, "Show full license texts")
+                    .changed()
+                {
+                    self.refresh_credits();
+                }
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.add(
-                            egui::Label::new(RichText::new(credits).monospace())
+                            egui::Label::new(RichText::new(self.credits_text.as_str()).monospace())
                                 .selectable(true)
                                 .wrap(),
                         );
@@ -434,6 +449,7 @@ impl KiraFrqGenApp {
         });
         if open_credits {
             self.credits_open = true;
+            self.refresh_credits();
         }
         ui.weak("Bulk-generate frq tables for your UTAU voicebank.");
         ui.add_space(10.0);

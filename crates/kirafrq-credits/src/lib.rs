@@ -6,6 +6,10 @@
 
 use std::sync::OnceLock;
 
+mod render;
+
+pub use render::{Style, render};
+
 const CREDITS_MD: &str = include_str!("../../../CREDITS.md");
 
 // HTML comments that delimit the generated blocks in `CREDITS.md`. The writer

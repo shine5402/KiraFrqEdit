@@ -32,12 +32,22 @@ fn the_statistic_is_high_where_a_harmonic_tone_is_voiced() {
     // A clean harmonic tone's energy sits well under 4 kHz, so the LoveTrain
     // ratio (100-4000 Hz vs 100-7900 Hz) stays near 1: periodic, voiced-like.
     let samples = tone(220.0, 1.0);
-    let mut track =
-        estimate_f0(Estimator::Harvest, &samples, SAMPLE_RATE, &F0Options::default()).unwrap();
+    let mut track = estimate_f0(
+        Estimator::Harvest,
+        &samples,
+        SAMPLE_RATE,
+        &F0Options::default(),
+    )
+    .unwrap();
     refine_f0_stonemask(&samples, SAMPLE_RATE, &mut track).unwrap();
 
-    let statistic =
-        d4c_aperiodicity0(&samples, SAMPLE_RATE, &track.temporal_positions, &track.f0_hz).unwrap();
+    let statistic = d4c_aperiodicity0(
+        &samples,
+        SAMPLE_RATE,
+        &track.temporal_positions,
+        &track.f0_hz,
+    )
+    .unwrap();
     assert_eq!(statistic.len(), track.len(), "one value per track frame");
 
     let mut voiced: Vec<f64> = track
@@ -57,12 +67,22 @@ fn the_statistic_is_high_where_a_harmonic_tone_is_voiced() {
 #[test]
 fn unvoiced_frames_read_zero() {
     let samples = vec![0.0; SAMPLE_RATE as usize];
-    let track =
-        estimate_f0(Estimator::Harvest, &samples, SAMPLE_RATE, &F0Options::default()).unwrap();
+    let track = estimate_f0(
+        Estimator::Harvest,
+        &samples,
+        SAMPLE_RATE,
+        &F0Options::default(),
+    )
+    .unwrap();
     assert_eq!(track.voiced().count(), 0, "silence has no voiced frames");
 
-    let statistic =
-        d4c_aperiodicity0(&samples, SAMPLE_RATE, &track.temporal_positions, &track.f0_hz).unwrap();
+    let statistic = d4c_aperiodicity0(
+        &samples,
+        SAMPLE_RATE,
+        &track.temporal_positions,
+        &track.f0_hz,
+    )
+    .unwrap();
     assert!(
         statistic.iter().all(|value| *value == 0.0),
         "frames with f0 == 0 read 0.0"

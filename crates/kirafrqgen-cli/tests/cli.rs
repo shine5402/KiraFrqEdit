@@ -602,6 +602,35 @@ fn help_lists_every_estimator_name_this_build_has() {
     assert!(run.stderr.is_empty(), "help goes to stdout: {}", run.stderr);
 }
 
+/// `--license` (and `--license-full`) need no PATH and print rendered credits,
+/// not raw Markdown; without a TTY there must be no ANSI escapes either.
+#[test]
+fn license_prints_rendered_credits_to_stdout() {
+    let scratch = Scratch::new("license");
+    let run = cli(&scratch.0, &["--license"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        run.stderr.is_empty(),
+        "credits go to stdout: {}",
+        run.stderr
+    );
+    assert!(
+        run.stdout.contains("kirafrqgen-cli --license"),
+        "{}",
+        run.stdout
+    );
+    assert!(!run.stdout.contains("\n# "), "{}", run.stdout);
+    assert!(!run.stdout.contains("```"), "{}", run.stdout);
+    assert!(!run.stdout.contains("]("), "{}", run.stdout);
+    assert!(!run.stdout.contains('\u{1b}'), "no ANSI without a tty");
+
+    let full = cli(&scratch.0, &["--license-full"]);
+    assert_eq!(full.code, 0, "{}", full.stderr);
+    assert!(full.stdout.contains("Apache License"), "{}", full.stdout);
+    assert!(!full.stdout.contains("```"), "{}", full.stdout);
+    assert!(!full.stdout.contains('\u{1b}'), "no ANSI without a tty");
+}
+
 /// The committed tiny ONNX fixture has RMVPE's I/O contract; with it in
 /// `KIRAFRQ_ML_DIR` the CLI must run the ML path end to end (modern build
 /// only) and write a table that keeps the #8 conventions.

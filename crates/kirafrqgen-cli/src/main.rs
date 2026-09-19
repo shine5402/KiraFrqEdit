@@ -1,6 +1,7 @@
 //! The `kirafrqgen-cli` binary (#12): plan, prompt, generate, report, exit.
 
 use std::collections::BTreeSet;
+use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,7 +21,15 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> u8 {
     if cli.license || cli.license_full {
-        print!("{}", kirafrq_credits::for_display(cli.license_full));
+        // Style for a terminal; plain text for a pipe or when NO_COLOR is set.
+        let style = if std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+            kirafrq_credits::Style::Ansi
+        } else {
+            kirafrq_credits::Style::Plain
+        };
+        let credits =
+            kirafrq_credits::render(kirafrq_credits::for_display(cli.license_full), style);
+        print!("{credits}");
         return 0;
     }
     let path = cli
