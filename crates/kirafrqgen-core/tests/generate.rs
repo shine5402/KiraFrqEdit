@@ -1189,6 +1189,46 @@ fn the_energy_gate_applies_to_swiftf0() {
     );
 }
 
+#[cfg(feature = "ml")]
+#[test]
+fn the_energy_gate_drops_the_bundled_swiftf0_quiet_tail() {
+    // #70 end to end over the real bundled model: the raw model voices the
+    // quiet tail, so the energy gate is what removes it, not the policy.
+    let scratch = Scratch::new("swiftf0-gate-bundled");
+    write_wav(&scratch, "A2.wav", mono(), &swiftf0_gated_samples());
+
+    let mut raw_opts = options(&scratch.0, &[Target::Frq]);
+    raw_opts.f0.estimator = kirafrqgen_core::Estimator::SwiftF0;
+    raw_opts.f0.recommended_tuning = false;
+    let estimator = kirafrqgen_core::build_estimator(&raw_opts.f0, 1).unwrap();
+    run(&raw_opts, estimator.as_ref());
+    let raw = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+
+    let mut tuned_opts = raw_opts.clone();
+    tuned_opts.overwrite = true;
+    tuned_opts.f0.recommended_tuning = true;
+    let estimator = kirafrqgen_core::build_estimator(&tuned_opts.f0, 1).unwrap();
+    run(&tuned_opts, estimator.as_ref());
+    let tuned = frq::read(&scratch.join("A2_wav.frq")).unwrap();
+
+    // The quiet tail starts at sample 6144 = frame 24.
+    assert!(
+        raw.f0_hz[24..].iter().any(|&value| value > 0.0),
+        "the raw model voices the quiet tail: {:?}",
+        &raw.f0_hz[24..]
+    );
+    assert!(
+        tuned.f0_hz[24..].iter().all(|&value| value == 0.0),
+        "the energy gate drops the quiet tail: {:?}",
+        &tuned.f0_hz[24..]
+    );
+    assert_eq!(
+        tuned.f0_hz[..24],
+        raw.f0_hz[..24],
+        "the loud head survives the energy gate"
+    );
+}
+
 // --- ML estimator factory (#48/#49) -----------------------------------------
 
 #[test]
@@ -1403,6 +1443,17 @@ fn swiftf0_samples(len: usize) -> Vec<i16> {
             (value * 0.1 * 32_767.0) as i16
         })
         .collect()
+}
+
+/// [`swiftf0_samples`] with a tail scaled to 2.5% from sample 6144 on: under
+/// the 5% energy gate while the raw model still voices it (#70).
+#[cfg(feature = "ml")]
+fn swiftf0_gated_samples() -> Vec<i16> {
+    let mut samples = swiftf0_samples(10_240);
+    for sample in &mut samples[6_144..] {
+        *sample = (f64::from(*sample) * 0.025) as i16;
+    }
+    samples
 }
 
 #[cfg(feature = "ml")]
