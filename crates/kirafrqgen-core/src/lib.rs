@@ -546,7 +546,8 @@ pub type CancelToken = Arc<AtomicBool>;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileReport {
     pub wav: PathBuf,
-    /// Targets whose table was written (or, for mrq, upserted and merged).
+    /// Targets whose table was written (for mrq, once the folder's batch write
+    /// that carries the entry has landed).
     pub written: BTreeSet<Target>,
     /// Targets skipped because a table already exists.
     pub existing: BTreeSet<Target>,
@@ -582,8 +583,9 @@ impl FileReport {
 /// what they surface.
 ///
 /// `file_finished` fires once the wav's outcome is final: at the end of its
-/// processing for ordinary wavs, and after its folder's `desc.mrq` merge-write
-/// for wavs that contributed an mrq entry.
+/// processing, except for a wav with an mrq entry, which waits for the
+/// folder's `desc.mrq` write that persists the entry (a batch flush or the
+/// run's tail write).
 pub trait Progress: Send + Sync {
     fn file_started(&self, _wav: &Path) {}
     /// Whether the reporter wants determinate per-file progress (#34). Only
@@ -597,7 +599,8 @@ pub trait Progress: Send + Sync {
     /// so the pair never moves backwards; the analysis owns the first 90%
     /// and the write phase the last 10%, one share per selected target
     /// credited as that target's outcome lands (an mrq contribution credits
-    /// at its folder merge). Wavs that skip analysis emit no event.
+    /// when the write that persists its entry lands). Wavs that skip analysis
+    /// emit no event.
     fn file_progress(&self, _wav: &Path, _done: u64, _total: u64) {}
     fn file_finished(&self, _report: &FileReport) {}
     fn folder_finished(&self, _folder: &Path) {}

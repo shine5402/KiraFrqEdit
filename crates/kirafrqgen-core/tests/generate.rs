@@ -516,6 +516,104 @@ fn one_sided_sharing_entries_count_as_absent_and_updates_both() {
     );
 }
 
+/// Records, at each `file_finished`, the folder's `desc.mrq` as it stands on
+/// disk: how many entries it holds and whether this wav's own entry is in it.
+/// Both are the observable of an incremental, honest flush.
+#[derive(Default)]
+struct DescTail {
+    events: Mutex<Vec<(PathBuf, usize, bool)>>,
+}
+
+impl Progress for DescTail {
+    fn file_finished(&self, report: &FileReport) {
+        let path = mrq::desc_path(report.wav.parent().unwrap());
+        let key = mrq::filename_key(report.wav.file_name().unwrap());
+        let (entries, present) = mrq::Desc::read(&path)
+            .ok()
+            .flatten()
+            .map_or((0, false), |desc| (desc.len(), desc.has(&key)));
+        self.events
+            .lock()
+            .unwrap()
+            .push((report.wav.clone(), entries, present));
+    }
+}
+
+#[test]
+fn mrq_flushes_a_folder_batch_before_the_run_ends() {
+    let scratch = Scratch::new("mrq-batch");
+    let total = 70;
+    for index in 0..total {
+        write_wav(
+            &scratch,
+            &format!("A{index:03}.wav"),
+            mono(),
+            &[SAMPLE; 1000],
+        );
+    }
+
+    let estimator = FakeEstimator::new(&[220.0]);
+    let opts = options(&scratch.0, &[Target::Mrq]);
+    let progress = DescTail::default();
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+    let summary = generate(&opts, &estimator, &progress, &cancel).unwrap();
+
+    assert_eq!(summary.written, total);
+    let events = progress.events.lock().unwrap();
+    assert_eq!(events.len(), total);
+    assert!(
+        events.iter().all(|(_, _, present)| *present),
+        "a row only settles once its own entry is on disk"
+    );
+    // A full batch lands mid-run: with 70 wavs one entry each, the 64th stage
+    // rewrites the file to 64 entries while 6 wavs are still to come.
+    let flushed_at = events
+        .iter()
+        .position(|(_, entries, _)| *entries == 64)
+        .expect("the file was rewritten before the run ended");
+    assert!(
+        flushed_at < total - 1,
+        "the flush happened with wavs still pending: {flushed_at}"
+    );
+}
+
+#[test]
+fn a_folder_smaller_than_a_batch_still_settles_at_the_run_end() {
+    let scratch = Scratch::new("mrq-sub-batch");
+    let total = 32;
+    for index in 0..total {
+        write_wav(
+            &scratch,
+            &format!("A{index:03}.wav"),
+            mono(),
+            &[SAMPLE; 1000],
+        );
+    }
+
+    let estimator = FakeEstimator::new(&[220.0]);
+    let opts = options(&scratch.0, &[Target::Mrq]);
+    let progress = DescTail::default();
+    let cancel: CancelToken = Arc::new(AtomicBool::new(false));
+    let summary = generate(&opts, &estimator, &progress, &cancel).unwrap();
+
+    assert_eq!(
+        summary.written, total,
+        "the tail write settles the whole folder"
+    );
+    let desc = mrq::Desc::read(&mrq::desc_path(&scratch.0))
+        .unwrap()
+        .unwrap();
+    assert_eq!(desc.len(), total);
+    let events = progress.events.lock().unwrap();
+    assert_eq!(events.len(), total);
+    assert!(
+        events
+            .iter()
+            .all(|(_, entries, present)| *entries == total && *present),
+        "every row settles only after the tail write put it on disk"
+    );
+}
+
 // --- llsm -------------------------------------------------------------------
 
 #[test]
@@ -636,27 +734,44 @@ fn cancellation_before_writes_stops_the_file_after_analysis() {
 }
 
 #[test]
-fn cancellation_before_the_mrq_merge_drops_the_contributions() {
-    let scratch = Scratch::new("cancel-merge");
+fn cancellation_flushes_the_mrq_entries_already_staged() {
+    let scratch = Scratch::new("cancel-mrq");
     write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);
     write_wav(&scratch, "A3.wav", mono(), &[SAMPLE; 1000]);
 
     let cancel: CancelToken = Arc::new(AtomicBool::new(false));
     let mut estimator = FakeEstimator::new(&[220.0]);
-    // A2 builds its mrq contribution; A3's estimate then sets the token, so
-    // phase A ends with A2's report waiting on a merge that must not run.
+    // A2 stages its mrq entry; A3's estimate then sets the token, so A3 is
+    // cancelled before it stages. The staged A2 entry still flushes, because
+    // its report already said "written".
     estimator.cancel_on_call = Some((2, Arc::clone(&cancel)));
     let opts = options(&scratch.0, &[Target::Mrq]);
     let progress = Recording::default();
     let summary = generate(&opts, &estimator, &progress, &cancel).unwrap();
 
     assert!(summary.cancelled);
-    assert_eq!(summary.written, 0, "the merge never ran");
-    assert!(!mrq::desc_path(&scratch.0).exists());
+    assert_eq!(summary.written, 1, "the staged contribution is flushed");
+    let desc = mrq::Desc::read(&mrq::desc_path(&scratch.0))
+        .unwrap()
+        .unwrap();
+    assert!(desc.has(&key("A2.wav")), "staged before the cancel");
+    assert!(!desc.has(&key("A3.wav")), "cancelled before it staged");
     assert_eq!(estimator.calls().len(), 2);
     let finished = progress.finished_files.lock().unwrap();
     assert_eq!(finished.len(), 2, "both reports fired");
-    assert!(finished.iter().all(|report| report.cancelled));
+    let written = finished
+        .iter()
+        .find(|report| report.wav.ends_with("A2.wav"))
+        .expect("A2 reported");
+    let cancelled = finished
+        .iter()
+        .find(|report| report.wav.ends_with("A3.wav"))
+        .expect("A3 reported");
+    assert!(
+        written.written.contains(&Target::Mrq),
+        "A2 settles when the tail write lands"
+    );
+    assert!(cancelled.cancelled, "A3 never staged");
 }
 
 // --- warnings and failures --------------------------------------------------
@@ -1564,7 +1679,7 @@ fn progress_reports_every_file_folder_and_the_summary() {
         finished
             .iter()
             .all(|report| report.written.contains(&Target::Mrq)),
-        "file_finished waits for the folder merge"
+        "mrq staging marks the row written"
     );
     let folders = progress.finished_folders.lock().unwrap();
     assert_eq!(folders.len(), 2);
@@ -1718,7 +1833,7 @@ fn file_progress_splits_the_write_share_across_targets() {
 }
 
 #[test]
-fn file_progress_credits_a_deferred_mrq_share_at_the_folder_merge() {
+fn file_progress_credits_the_mrq_share_at_the_folder_write() {
     let scratch = Scratch::new("file-progress-mrq");
     let wav = write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);
     let opts = options(&scratch.0, &[Target::Frq, Target::Mrq]);
@@ -1732,14 +1847,15 @@ fn file_progress_credits_a_deferred_mrq_share_at_the_folder_merge() {
         .filter(|(path, _, _)| *path == wav)
         .map(|(_, done, _)| *done)
         .collect();
-    // The frq share lands in phase A; the mrq share waits for the merge.
+    // The frq share lands in the wav's own pass; the mrq share waits for the
+    // write that persists the entry, which for a lone wav is the tail flush.
     assert_eq!(
         fractions,
         [112, 225, 337, 450, 562, 675, 787, 900, 950, 1000]
     );
     assert!(
         events.iter().any(|(_, done, _)| *done == 1000),
-        "the merge completes the file"
+        "the folder write completes the file"
     );
 }
 
