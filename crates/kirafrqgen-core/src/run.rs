@@ -271,12 +271,13 @@ fn process_wav(
         return WavResult { report, mrq: None };
     }
 
-    // The tuned WORLD path's post-passes (#54/#64): the energy gate applies to
-    // both WORLD estimators, the aperiodicity gate to Harvest only. The ML
-    // estimator is excluded (#53): its confidence gate is its voicing policy,
-    // and the WORLD gates are a WORLD workaround.
-    if opts.f0.world_quirks && is_world(opts.f0.estimator) {
-        voicing::apply_energy_gate(&decoded.samples, &mut track, opts.f0.energy_gate_ratio);
+    // The recommended tuning's post-passes (#54/#64/#70): the energy gate
+    // covers every estimator except RMVPE, whose model confidence is its own
+    // voicing policy (#53), and the aperiodicity gate stays Harvest-only.
+    if opts.f0.recommended_tuning {
+        if opts.f0.estimator.supports_energy_gate() {
+            voicing::apply_energy_gate(&decoded.samples, &mut track, opts.f0.energy_gate_ratio);
+        }
 
         // A no-voiced (silence-only) track is a no-op and skips the D4C pass
         // entirely (#64).
@@ -644,12 +645,6 @@ fn validate(opts: &GenerateOptions) -> Result<(), GeneratorError> {
         ));
     }
     Ok(())
-}
-
-/// Whether `estimator` is a WORLD estimator: the energy voicing gate (#54)
-/// applies to the WORLD pair only (#53).
-fn is_world(estimator: Estimator) -> bool {
-    matches!(estimator, Estimator::Dio | Estimator::Harvest)
 }
 
 fn build_pool(jobs: usize) -> Result<rayon::ThreadPool, GeneratorError> {

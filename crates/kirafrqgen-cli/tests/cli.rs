@@ -540,42 +540,39 @@ fn rmvpe_without_a_model_errors_with_the_download_hint() {
 }
 
 #[test]
-fn no_world_quirks_with_rmvpe_warns_and_continues() {
-    if !cfg!(feature = "ml") {
-        // The compat build has no `rmvpe` value, so there is nothing to warn
-        // about; the usage error is covered above.
-        return;
-    }
-    let scratch = Scratch::new("rmvpe-quirks");
-    scratch.write("bank/A2.wav", b"placeholder");
-
-    // No model in the test environment: the run fails at the factory, but the
-    // warning is emitted first and the failure is the model error, not the
-    // flag.
-    let run = cli(
-        &scratch.0,
-        &["bank", "--estimator", "rmvpe", "--no-world-quirks"],
-    );
-    assert_eq!(run.code, 1, "{}", run.stderr);
-    assert!(
-        run.stderr.contains("--no-world-quirks has no effect"),
-        "{}",
-        run.stderr
-    );
-}
-
-#[test]
-fn no_world_quirks_with_a_world_estimator_is_silent() {
-    let scratch = Scratch::new("world-quirks");
+fn no_recommended_tuning_with_a_world_estimator_is_silent() {
+    let scratch = Scratch::new("recommended-tuning");
     write_tone(&scratch, "bank/A2.wav");
 
     let run = run_ok(
         &scratch.0,
-        &["bank", "--estimator", "dio", "--no-world-quirks"],
+        &["bank", "--estimator", "dio", "--no-recommended-tuning"],
     );
     assert!(
         !run.stderr.contains("no effect"),
-        "a WORLD estimator accepts the flag: {}",
+        "the flag is accepted without comment: {}",
+        run.stderr
+    );
+    assert!(scratch.path("bank/A2_wav.frq").exists());
+}
+
+/// #71/#70: the tuning covers every estimator but RMVPE, so an explicit
+/// opt-out with SwiftF0 is a plain run, not a warned no-op.
+#[test]
+fn no_recommended_tuning_with_swiftf0_is_silent() {
+    if !cfg!(feature = "ml") {
+        return;
+    }
+    let scratch = Scratch::new("swiftf0-tuning");
+    write_tone(&scratch, "bank/A2.wav");
+
+    let run = run_ok(
+        &scratch.0,
+        &["bank", "--estimator", "swiftf0", "--no-recommended-tuning"],
+    );
+    assert!(
+        !run.stderr.contains("no effect"),
+        "the flag is accepted without comment: {}",
         run.stderr
     );
     assert!(scratch.path("bank/A2_wav.frq").exists());
@@ -686,11 +683,11 @@ fn swiftf0_runs_end_to_end_with_the_bundled_model() {
 }
 
 /// The default resolves to RMVPE when the modern build finds a model, and to
-/// DIO otherwise (#49); an explicit choice always wins.
+/// SwiftF0 when it does not (#49/#62/#71); an explicit choice always wins.
 #[test]
 fn the_default_estimator_is_capability_aware() {
     if !cfg!(feature = "ml") {
-        // The compat build has no ML tier, so the default is DIO by
+        // The compat build has no ML tier, so the default is Harvest by
         // construction and there is nothing model-dependent to exercise.
         return;
     }
@@ -735,6 +732,42 @@ fn the_default_estimator_is_capability_aware() {
     assert!(
         fixture_voiced.iter().any(|&value| value > 400.0),
         "the fixture's ~441.5 Hz slot must appear: {fixture_voiced:?}"
+    );
+}
+
+/// #62/#71: with no RMVPE model, the modern default falls back to the bundled
+/// SwiftF0 rather than DIO.
+#[test]
+fn the_default_estimator_falls_back_to_swiftf0_without_an_rmvpe_model() {
+    if !cfg!(feature = "ml") {
+        return;
+    }
+    let scratch = Scratch::new("default-swiftf0");
+    write_tone(&scratch, "bank/A2.wav");
+    // An empty model dir: no `rmvpe.onnx` resolves, so RMVPE is unavailable.
+    let empty = scratch.dir("models");
+
+    let default = run_ok_with_env(
+        &scratch.0,
+        &["bank", "-v"],
+        &[("KIRAFRQ_ML_DIR", empty.to_str().unwrap())],
+    );
+    assert!(default.stderr.contains("wrote frq"), "{}", default.stderr);
+    let default_table = frq::read(&scratch.path("bank/A2_wav.frq")).unwrap();
+
+    // The same input through explicit SwiftF0 must reproduce the default
+    // exactly, proving the fallback was SwiftF0 and not DIO.
+    let swift = run_ok_with_env(
+        &scratch.0,
+        &["bank", "--overwrite", "--estimator", "swiftf0"],
+        &[("KIRAFRQ_ML_DIR", empty.to_str().unwrap())],
+    );
+    assert!(swift.stderr.contains("written 1"), "{}", swift.stderr);
+    let swift_table = frq::read(&scratch.path("bank/A2_wav.frq")).unwrap();
+
+    assert_eq!(
+        default_table.f0_hz, swift_table.f0_hz,
+        "the default must have used SwiftF0"
     );
 }
 
