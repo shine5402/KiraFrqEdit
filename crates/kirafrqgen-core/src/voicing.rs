@@ -1,7 +1,7 @@
-//! The tuned WORLD path's voicing gates (#54/#64): post-passes over an f0
-//! track that force frames unvoiced. The energy gate drops frames quieter than
-//! a share of the file's voiced-frame amplitude; the aperiodicity gate drops
-//! Harvest frames with a low raw D4C LoveTrain statistic.
+//! The recommended tuning's voicing gates (#54/#64/#70): post-passes over an
+//! f0 track that force frames unvoiced. Which estimator each gate covers is
+//! decided at the call site in `run.rs`; the functions below carry the
+//! mechanics.
 
 use crate::F0Track;
 use crate::table::amplitudes;
