@@ -22,6 +22,21 @@ SwiftF0 ships with its model (MIT) bundled, so it works with no download. An on-
 license for the bundled model is next to it at
 [`crates/kirafrq-ml-provider/assets/swiftf0.LICENSE`](crates/kirafrq-ml-provider/assets/swiftf0.LICENSE).
 
+## GPU runner (Windows)
+
+The ML estimators can run on a DirectX 12 GPU through DirectML. The GUI exposes it under
+the hamburger menu's Advanced settings; on the CLI:
+
+```
+kirafrqgen-cli --list-ml-devices                        # adapters and their indices
+kirafrqgen-cli bank --ml-runner directml                # automatic (high-performance GPU)
+kirafrqgen-cli bank --ml-runner directml --ml-device 1  # a specific adapter
+```
+
+ONNX Runtime keeps its CPU execution provider alongside DirectML, so operations DirectML
+does not take run on the CPU. DIO and Harvest always run on the CPU. The Windows release
+binaries bundle Microsoft's DirectML runtime (see [CREDITS.md](CREDITS.md)).
+
 ## License
 
 [MIT](LICENSE)

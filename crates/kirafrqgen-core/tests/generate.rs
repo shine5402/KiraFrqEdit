@@ -1255,6 +1255,7 @@ fn selecting_rmvpe_without_a_model_is_an_early_config_error() {
         ml: kirafrqgen_core::MlConfig {
             model_path: Some(PathBuf::from("definitely-not-a-model.onnx")),
             confidence_threshold: None,
+            ..kirafrqgen_core::MlConfig::default()
         },
         ..kirafrqgen_core::F0Config::default()
     };
@@ -1285,6 +1286,7 @@ fn the_ml_capability_predicates_are_consistent() {
         ml: kirafrqgen_core::MlConfig {
             model_path: Some(PathBuf::from("no-such-model.onnx")),
             confidence_threshold: None,
+            ..kirafrqgen_core::MlConfig::default()
         },
         ..kirafrqgen_core::F0Config::default()
     };
@@ -1316,6 +1318,7 @@ fn an_ml_confidence_override_above_every_peak_unvoices_the_whole_file() {
     opts.f0.ml = kirafrqgen_core::MlConfig {
         model_path: Some(ml_fixture()),
         confidence_threshold: Some(2.0),
+        ..kirafrqgen_core::MlConfig::default()
     };
     let estimator = kirafrqgen_core::build_estimator(&opts.f0, 1).unwrap();
     run(&opts, estimator.as_ref());
@@ -1338,6 +1341,7 @@ fn the_ml_fixture_writes_a_conforming_table() {
     opts.f0.ml = kirafrqgen_core::MlConfig {
         model_path: Some(ml_fixture()),
         confidence_threshold: None,
+        ..kirafrqgen_core::MlConfig::default()
     };
     let estimator = kirafrqgen_core::build_estimator(&opts.f0, 1).unwrap();
     assert!(!estimator.supports_stonemask(), "ML never refines");
@@ -1372,6 +1376,7 @@ fn an_unloadable_ml_model_is_an_early_config_error() {
     opts.f0.ml = kirafrqgen_core::MlConfig {
         model_path: Some(broken),
         confidence_threshold: None,
+        ..kirafrqgen_core::MlConfig::default()
     };
     match kirafrqgen_core::build_estimator(&opts.f0, 1) {
         Err(GeneratorError::Config(message)) => {
@@ -1412,6 +1417,7 @@ fn selecting_swiftf0_with_a_missing_explicit_model_is_an_early_config_error() {
         ml: kirafrqgen_core::MlConfig {
             model_path: Some(PathBuf::from("definitely-not-a-model.onnx")),
             confidence_threshold: None,
+            ..kirafrqgen_core::MlConfig::default()
         },
         ..kirafrqgen_core::F0Config::default()
     };

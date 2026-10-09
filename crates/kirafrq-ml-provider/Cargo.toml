@@ -18,6 +18,17 @@ rubato.workspace = true
 ort = { workspace = true, optional = true }
 realfft = { workspace = true, optional = true }
 
+# DirectML is a Windows-only execution provider: the pinned Windows ONNX
+# Runtime archive carries it, and the Linux/macOS archives have no DirectML
+# build at all. Adding it in a target-specific entry keeps the `ort` feature
+# exactly as it was on other platforms; the compat build stays ORT-free
+# because `ort` remains optional.
+[target.'cfg(windows)'.dependencies]
+ort = { workspace = true, optional = true, features = ["directml"] }
+# DXGI adapter enumeration for the device picker: the adapter index is the
+# DirectML `device_id`, and DXGI is the only source of adapter names.
+windows = { version = "0.62", features = ["Win32_Graphics_Dxgi"] }
+
 [dev-dependencies]
 # The bundled SwiftF0 model's pinned-commit provenance check (#69).
 sha2 = "0.10"
@@ -30,4 +41,8 @@ required-features = ["ort"]
 
 [[example]]
 name = "swiftf0_probe"
+required-features = ["ort"]
+
+[[example]]
+name = "directml_probe"
 required-features = ["ort"]

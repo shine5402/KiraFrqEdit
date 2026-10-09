@@ -89,9 +89,37 @@ pub fn default_estimator(rmvpe_available: bool) -> Estimator {
     }
 }
 
-/// ML estimator settings (#48): the model file and the confidence threshold.
-/// Non-`Copy` because the path is owned; the pipeline keeps it in
-/// [`GenerateOptions`] and hands a clone to the provider.
+/// Which runtime the ML estimators (RMVPE, SwiftF0) run on.
+///
+/// Data-only, like [`Estimator`]: the compat build compiles the DirectML
+/// variant and rejects it at [`build_estimator`] time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MlRunner {
+    /// ONNX Runtime's CPU path; the default everywhere.
+    #[default]
+    Cpu,
+    /// DirectML (Windows): a DirectX 12 GPU. ONNX Runtime keeps its CPU
+    /// execution provider alongside it, so operations DirectML does not take
+    /// run on the CPU.
+    DirectMl,
+}
+
+impl MlRunner {
+    /// The user-facing one-liner the front ends show for this runner.
+    pub fn description(self) -> &'static str {
+        match self {
+            MlRunner::Cpu => "Runs the ML estimators on the processor. The safe default.",
+            MlRunner::DirectMl => {
+                "Runs the ML estimators on a DirectX 12 GPU. Operations DirectML cannot \
+                 run stay on the CPU."
+            }
+        }
+    }
+}
+
+/// ML estimator settings (#48): the model file, the confidence threshold and
+/// the runner. Non-`Copy` because the path is owned; the pipeline keeps
+/// it in [`GenerateOptions`] and hands a clone to the provider.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MlConfig {
     /// An explicit model file override; `None` resolves by filename
@@ -101,6 +129,63 @@ pub struct MlConfig {
     /// The #53 confidence override; `None` uses the model's own default
     /// (RMVPE 0.03, SwiftF0 0.9). Internal, no CLI/GUI knob.
     pub confidence_threshold: Option<f64>,
+    /// Which runtime the ML estimators use.
+    pub runner: MlRunner,
+    /// The DirectML adapter index (DXGI order; ONNX Runtime calls it
+    /// `device_id`). `None` lets ONNX Runtime prefer the high-performance
+    /// GPU. Ignored unless `runner` is a DirectML variant.
+    pub directml_device: Option<u32>,
+}
+
+/// Whether this build can offer the DirectML runner at all (Windows `ml`
+/// builds).
+#[cfg(feature = "ml")]
+pub const DIRECTML_SUPPORTED: bool = kirafrq_ml_provider::DIRECTML_SUPPORTED;
+#[cfg(not(feature = "ml"))]
+pub const DIRECTML_SUPPORTED: bool = false;
+
+/// One DirectML adapter the runner can target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MlDevice {
+    /// The DXGI adapter index: DirectML's `device_id`.
+    pub index: u32,
+    /// The adapter description, e.g. `NVIDIA GeForce RTX 3070`.
+    pub name: String,
+}
+
+impl MlDevice {
+    /// The device picker's label, e.g. `0 — NVIDIA GeForce RTX 3070 (default)`.
+    pub fn label(&self) -> String {
+        if self.index == 0 {
+            format!("{} — {} (default)", self.index, self.name)
+        } else {
+            format!("{} — {}", self.index, self.name)
+        }
+    }
+}
+
+/// The DirectML adapters this machine offers, in `device_id` order. `Err`
+/// carries the user-facing reason when the list cannot be produced (no
+/// DirectML in this build, or a DXGI failure).
+pub fn ml_devices() -> Result<Vec<MlDevice>, String> {
+    #[cfg(feature = "ml")]
+    {
+        kirafrq_ml_provider::directml_devices()
+            .map(|devices| {
+                devices
+                    .into_iter()
+                    .map(|device| MlDevice {
+                        index: device.index,
+                        name: device.name,
+                    })
+                    .collect()
+            })
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(not(feature = "ml"))]
+    {
+        Err("this build has no ML support".to_string())
+    }
 }
 
 /// f0 estimation settings shared by every wav in a run.
@@ -411,6 +496,16 @@ fn ml_policy(config: &F0Config, default_threshold: f64) -> kirafrq_ml_provider::
     }
 }
 
+/// The provider's runner for the config; the device is only consulted
+/// for DirectML.
+#[cfg(feature = "ml")]
+fn ml_runner(config: &F0Config) -> kirafrq_ml_provider::Runner {
+    match config.ml.runner {
+        MlRunner::Cpu => kirafrq_ml_provider::Runner::Cpu,
+        MlRunner::DirectMl => kirafrq_ml_provider::Runner::DirectMl,
+    }
+}
+
 #[cfg(feature = "ml")]
 fn build_ml_estimator(
     config: &F0Config,
@@ -425,7 +520,8 @@ fn build_ml_estimator(
         config,
         kirafrq_ml_provider::RMVPE_DEFAULT_CONFIDENCE_THRESHOLD,
     );
-    let inner = kirafrq_ml_provider::rmvpe::Rmvpe::new(model_path, policy, jobs);
+    let inner = kirafrq_ml_provider::rmvpe::Rmvpe::new(model_path, policy, jobs)
+        .with_runner(ml_runner(config), config.ml.directml_device);
     // Load the session now so an unloadable model is the same early config
     // error as a missing one (#49), not a per-file failure.
     inner
@@ -450,7 +546,8 @@ fn build_swiftf0_estimator(
         config,
         kirafrq_ml_provider::SWIFTF0_DEFAULT_CONFIDENCE_THRESHOLD,
     );
-    let inner = kirafrq_ml_provider::swiftf0::SwiftF0::new(source, policy, jobs);
+    let inner = kirafrq_ml_provider::swiftf0::SwiftF0::new(source, policy, jobs)
+        .with_runner(ml_runner(config), config.ml.directml_device);
     inner
         .ensure_session()
         .map_err(|error| GeneratorError::Config(error.to_string()))?;
@@ -749,6 +846,45 @@ mod tests {
             "Fast traditional DSP-based algorithm from WORLD, but it may struggle on \
              less-than-ideal recordings."
         );
+    }
+
+    #[test]
+    fn the_default_ml_config_runs_on_the_cpu_with_an_automatic_device() {
+        let ml = MlConfig::default();
+        assert_eq!(ml.runner, MlRunner::Cpu);
+        assert_eq!(ml.directml_device, None, "None means ONNX Runtime picks");
+    }
+
+    #[test]
+    fn every_ml_runner_has_a_description() {
+        for runner in [MlRunner::Cpu, MlRunner::DirectMl] {
+            assert!(!runner.description().is_empty());
+        }
+    }
+
+    #[test]
+    fn device_labels_mark_the_default_adapter() {
+        let first = MlDevice {
+            index: 0,
+            name: "Integrated Graphics".to_owned(),
+        };
+        assert_eq!(first.label(), "0 — Integrated Graphics (default)");
+
+        let second = MlDevice {
+            index: 2,
+            name: "Discrete GPU".to_owned(),
+        };
+        assert_eq!(second.label(), "2 — Discrete GPU");
+    }
+
+    #[cfg(feature = "ml")]
+    #[test]
+    fn the_ml_runner_maps_onto_the_provider_variants() {
+        let mut config = F0Config::default();
+        assert_eq!(ml_runner(&config), kirafrq_ml_provider::Runner::Cpu);
+
+        config.ml.runner = MlRunner::DirectMl;
+        assert_eq!(ml_runner(&config), kirafrq_ml_provider::Runner::DirectMl);
     }
 
     #[test]

@@ -44,6 +44,16 @@ jobs:
           sudo apt-get install -y libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
       - name: cargo build --release
         run: cargo build --release --bins --locked
+      # The DirectML runtime must sit beside the Windows binaries, and the
+      # license texts that accompany it come along (see third_party/DirectML).
+      - name: Stage Windows runtime files
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-extras | Out-Null
+          Copy-Item target/release/DirectML.dll dist-extras/
+          Copy-Item third_party/DirectML/LICENSE.txt dist-extras/DirectML.LICENSE.txt
+          Copy-Item third_party/DirectML/ThirdPartyNotices.txt dist-extras/DirectML.ThirdPartyNotices.txt
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
@@ -51,3 +61,4 @@ jobs:
           path: |
             target/release/kirafrqgen-cli${{ matrix.exe-suffix }}
             target/release/kirafrqgen-gui${{ matrix.exe-suffix }}
+            dist-extras/*

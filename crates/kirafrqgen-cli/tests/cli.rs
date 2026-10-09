@@ -160,6 +160,8 @@ fn usage_errors_exit_2_with_an_empty_stdout() {
         &["bank", "--estimator", "swipe"],
         &["bank", "-q", "-v"],
         &["bank", "--delete-llsm", "--no-delete-llsm"],
+        &["bank", "--ml-device", "1"],
+        &["bank", "--ml-runner", "vulkan"],
     ];
     for args in cases {
         let run = cli(&scratch.0, args);
@@ -626,6 +628,54 @@ fn license_prints_rendered_credits_to_stdout() {
     assert!(full.stdout.contains("Apache License"), "{}", full.stdout);
     assert!(!full.stdout.contains("```"), "{}", full.stdout);
     assert!(!full.stdout.contains('\u{1b}'), "no ANSI without a tty");
+}
+
+/// The adapter list either prints labels (Windows ML build with
+/// adapters) or a clear reason; it needs no PATH and touches no folder.
+#[test]
+fn list_ml_devices_prints_adapters_or_a_reason() {
+    let scratch = Scratch::new("ml-devices");
+    scratch.write("bank/notes.txt", b"never touched");
+
+    let run = cli(&scratch.0, &["--list-ml-devices"]);
+    assert_ne!(run.code, 2, "not a usage error: {}", run.stderr);
+    if run.code == 0 {
+        assert!(
+            !run.stdout.trim().is_empty(),
+            "a listed device has a label: {}",
+            run.stderr
+        );
+    } else {
+        assert!(
+            run.stderr.contains("DirectML"),
+            "the failure names DirectML: {}",
+            run.stderr
+        );
+        assert!(run.stdout_is_empty(), "{}", run.stdout);
+    }
+}
+
+/// On platforms without the DirectML execution provider, selecting the
+/// runner fails at configuration time with the reason, before any write.
+/// (A Windows ML build could create a real DML session, which CI cannot.)
+#[test]
+fn a_directml_runner_without_directml_fails_early() {
+    if !cfg!(feature = "ml") || cfg!(all(windows, feature = "ml")) {
+        return;
+    }
+    let scratch = Scratch::new("directml-unavailable");
+    write_tone(&scratch, "bank/A2.wav");
+
+    let run = cli(
+        &scratch.0,
+        &["bank", "--estimator", "swiftf0", "--ml-runner", "directml"],
+    );
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    assert!(run.stderr.contains("DirectML"), "{}", run.stderr);
+    assert!(
+        !scratch.path("bank/A2_wav.frq").exists(),
+        "the run fails before any write"
+    );
 }
 
 /// The committed tiny ONNX fixture has RMVPE's I/O contract; with it in
