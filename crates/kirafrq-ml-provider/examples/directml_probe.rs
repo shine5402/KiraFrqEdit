@@ -17,7 +17,7 @@ use std::time::Instant;
 use kirafrq_ml_provider::model::ModelSource;
 use kirafrq_ml_provider::policy::UvPolicy;
 use kirafrq_ml_provider::resample::resample_to_model_rate;
-use kirafrq_ml_provider::runner::Runner;
+use kirafrq_ml_provider::runner::{Runner, SessionConfig};
 use kirafrq_ml_provider::swiftf0::{BUNDLED_MODEL, SwiftF0};
 use kirafrq_ml_provider::{DIRECTML_SUPPORTED, Error};
 
@@ -49,7 +49,10 @@ fn main() {
     if let Some(path) = rmvpe_path {
         let build = |runner| {
             kirafrq_ml_provider::rmvpe::Rmvpe::new(path.clone(), UvPolicy::rmvpe(None), 1)
-                .with_runner(runner, None)
+                .with_session_config(SessionConfig {
+                    runner,
+                    directml_device: None,
+                })
         };
         probe("RMVPE", &audio_16k, build);
     }
@@ -62,7 +65,10 @@ fn main() {
             UvPolicy::swiftf0(None),
             1,
         )
-        .with_runner(runner, None)
+        .with_session_config(SessionConfig {
+            runner,
+            directml_device: None,
+        })
     };
     probe("SwiftF0", &audio_16k, build);
 }
