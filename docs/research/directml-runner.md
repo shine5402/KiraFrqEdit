@@ -207,16 +207,16 @@ enumeration fails).
   path (`None` = `PerformancePreference::HighPerformance`). ONNX Runtime's
   built-in CPU fallback stays on, matching DirectML's design.
 - **GUI**: hamburger (`icons::LIST`) → "Advanced…" opens a window next to the
-  Credits one: ML runner radios (CPU / DirectML) and a "DirectML device"
-  combo — "Automatic" plus `N — <DXGI description>` entries (mark index 0 as
-  default), disabled unless DirectML is selected and disabled while a run is
-  active. Windows-only; hidden when the build has no DML. Session-only
-  persistence, matching #13, with a Refresh devices button.
+  Credits one: ML runner radios (CPU / DirectML) and, for DirectML, a
+  "DirectML device" combo — "Automatic" plus `N — <DXGI description>` entries
+  (index 0 marked default) and a Refresh devices button. Windows-only; hidden
+  when the build has no DML. Session-only persistence, matching #13.
 - **Device enumeration** (Windows, `cfg(windows)`): the `windows` crate
   (`Win32_Graphics_Dxgi`) walks `IDXGIFactory1::EnumAdapters1` →
   `DXGI_ADAPTER_DESC1.Description`; the index is the DML `device_id`. Software
   adapters (WARP) are excluded. If enumeration fails, the UI offers
-  "Automatic" and shows the reason.
+  "Automatic" and shows the reason; raw indices stay available through the
+  CLI's `--ml-device`.
 - **CLI parity**: `--ml-runner cpu|directml`, `--ml-device N` (only with a
   DirectML runner), `--list-ml-devices`; CPU is the default.
 - **Build gating**: a Windows-only target dependency in

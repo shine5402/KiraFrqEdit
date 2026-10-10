@@ -40,17 +40,13 @@ fn estimator_runnable(estimator: Estimator, ml_available: bool) -> bool {
     estimator != Estimator::Rmvpe || ml_available
 }
 
-/// The DirectML device combo's selected text: `Automatic`, the named
-/// adapter, or a numeric fallback for a selection that is no longer
-/// enumerated.
+/// The DirectML device combo's selected text: `Automatic` or the named
+/// adapter. A selection that is no longer enumerated cannot be shown; the
+/// reload that follows enumeration resets it to automatic.
 fn device_selection_label(devices: &[MlDevice], selected: Option<u32>) -> String {
-    match selected {
-        None => AUTOMATIC_DEVICE_LABEL.to_owned(),
-        Some(index) => devices
-            .iter()
-            .find(|device| device.index == index)
-            .map_or_else(|| format!("Device {index}"), MlDevice::label),
-    }
+    selected
+        .and_then(|index| devices.iter().find(|device| device.index == index))
+        .map_or_else(|| AUTOMATIC_DEVICE_LABEL.to_owned(), MlDevice::label)
 }
 
 /// Lock the run state, recovering a poisoned mutex: a panicked worker must not
@@ -1559,11 +1555,6 @@ mod tests {
         assert_eq!(
             device_selection_label(&devices, Some(2)),
             "2 — Discrete GPU"
-        );
-        assert_eq!(
-            device_selection_label(&devices, Some(3)),
-            "Device 3",
-            "an adapter that vanished keeps a usable label"
         );
     }
 
