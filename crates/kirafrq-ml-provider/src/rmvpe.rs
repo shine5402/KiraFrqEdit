@@ -16,7 +16,7 @@ use crate::mel::Frontend;
 use crate::model::ModelSource;
 use crate::policy::UvPolicy;
 use crate::resample::resample_to_model_rate;
-use crate::runner::{Runner, SessionConfig};
+use crate::runner::SessionConfig;
 use crate::session;
 use crate::{Error, ProgressObserver};
 
@@ -40,7 +40,7 @@ pub struct Rmvpe {
     /// cores). Clamped against the machine when the session is built.
     jobs: usize,
     /// The execution provider and device; CPU by default.
-    session: SessionConfig,
+    session_config: SessionConfig,
 }
 
 impl Rmvpe {
@@ -51,18 +51,15 @@ impl Rmvpe {
             source: source.into(),
             policy,
             jobs,
-            session: SessionConfig::default(),
+            session_config: SessionConfig::default(),
         }
     }
 
-    /// Run this estimator on `runner` (`Cpu` or a DirectML variant) and,
-    /// for DirectML, the adapter `directml_device` (`None` = automatic).
+    /// Run this estimator with `session_config`'s execution provider and
+    /// device (CPU by default).
     #[must_use]
-    pub fn with_runner(mut self, runner: Runner, directml_device: Option<u32>) -> Self {
-        self.session = SessionConfig {
-            runner,
-            directml_device,
-        };
+    pub fn with_session_config(mut self, session_config: SessionConfig) -> Self {
+        self.session_config = session_config;
         self
     }
 
@@ -70,7 +67,7 @@ impl Rmvpe {
     /// cannot be loaded then fails at configuration time (#49) instead of on
     /// the first file.
     pub fn ensure_session(&self) -> Result<(), Error> {
-        session::with(&self.source, self.jobs, self.session, |_| Ok(()))
+        session::with(&self.source, self.jobs, self.session_config, |_| Ok(()))
     }
 
     /// Estimate f0 for mono 44.1 kHz `samples` and map it onto the table grid
@@ -137,7 +134,7 @@ impl Rmvpe {
     /// Run the process session over a padded `[1, 128, T_pad]` log-mel input
     /// and return the first `frames` rows of the `[1, T_pad, 360]` salience.
     fn run_session(&self, mel: &[f32], frames: usize) -> Result<Vec<f32>, Error> {
-        session::with(&self.source, self.jobs, self.session, |session| {
+        session::with(&self.source, self.jobs, self.session_config, |session| {
             let padded = mel.len() / crate::mel::N_MELS;
             let input = Tensor::from_array((
                 [1_i64, crate::mel::N_MELS as i64, padded as i64],

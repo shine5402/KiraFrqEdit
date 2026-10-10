@@ -20,7 +20,7 @@ use crate::grid::{NativeContour, SWIFTF0_CONTRACT, TABLE_HOP_SAMPLES, Track, map
 use crate::model::{ModelSource, SWIFTF0_FILE_NAME, resolve_file};
 use crate::policy::UvPolicy;
 use crate::resample::resample_to_model_rate;
-use crate::runner::{Runner, SessionConfig};
+use crate::runner::SessionConfig;
 use crate::session;
 use crate::{Error, ProgressObserver};
 
@@ -73,7 +73,7 @@ pub struct SwiftF0 {
     /// cores). Clamped against the machine when the session is built.
     jobs: usize,
     /// The execution provider and device; CPU by default.
-    session: SessionConfig,
+    session_config: SessionConfig,
 }
 
 impl SwiftF0 {
@@ -84,25 +84,22 @@ impl SwiftF0 {
             source: source.into(),
             policy,
             jobs,
-            session: SessionConfig::default(),
+            session_config: SessionConfig::default(),
         }
     }
 
-    /// Run this estimator on `runner` (`Cpu` or a DirectML variant) and,
-    /// for DirectML, the adapter `directml_device` (`None` = automatic).
+    /// Run this estimator with `session_config`'s execution provider and
+    /// device (CPU by default).
     #[must_use]
-    pub fn with_runner(mut self, runner: Runner, directml_device: Option<u32>) -> Self {
-        self.session = SessionConfig {
-            runner,
-            directml_device,
-        };
+    pub fn with_session_config(mut self, session_config: SessionConfig) -> Self {
+        self.session_config = session_config;
         self
     }
 
     /// Build the process session now if it is not built yet, so an unloadable
     /// model fails at configuration time (#49) instead of on the first file.
     pub fn ensure_session(&self) -> Result<(), Error> {
-        session::with(&self.source, self.jobs, self.session, |_| Ok(()))
+        session::with(&self.source, self.jobs, self.session_config, |_| Ok(()))
     }
 
     /// Estimate f0 for mono 44.1 kHz `samples` and map it onto the table grid
@@ -164,7 +161,7 @@ impl SwiftF0 {
             audio.resize(MIN_AUDIO_LENGTH, 0.0);
         }
 
-        session::with(&self.source, self.jobs, self.session, |session| {
+        session::with(&self.source, self.jobs, self.session_config, |session| {
             let length = audio.len();
             let input =
                 Tensor::from_array(([1_i64, length as i64], audio.clone().into_boxed_slice()))

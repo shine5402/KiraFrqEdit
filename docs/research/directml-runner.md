@@ -3,8 +3,8 @@
 Research for a Windows GPU option for the ML f0 estimators (RMVPE, SwiftF0),
 collected 2026-10. Claims are marked **verified** (checked against the pinned
 `ort` 2.0.0-rc.13 / ONNX Runtime 1.28 artifacts or upstream source while
-writing this) or **cited** (upstream documentation). The "Design implications"
-section is a proposal for the spec; it is not a decision.
+writing this) or **cited** (upstream documentation). The "Design" section
+records the landed design; the code is the source of truth.
 
 ## Summary
 
@@ -15,12 +15,10 @@ section is a proposal for the spec; it is not a decision.
 - The prebuilt Windows ONNX Runtime that `ort` downloads already has the DML EP
   compiled in, and the same archive ships `DirectML.dll` (v1.15.4), which
   `ort-sys`'s `copy-dylibs` seeds into the build's `target/` folder.
-- A "no fallback" mode (the original sketch's third setting,
-  `SessionBuilder::with_disable_cpu_fallback()`) was probed and dropped: ONNX
-  Runtime still leaves some nodes on the CPU for **both** current models, so
-  the option could never build them (see Empirical verification). The shipped
-  DirectML runner keeps ONNX Runtime's built-in CPU fallback — both for nodes
-  the DirectML EP does not take and when the dispatch cannot register.
+- DirectML keeps ONNX Runtime's built-in CPU fallback: operations the DirectML
+  EP does not take run on the CPU. A strict mode that disables the fallback
+  cannot commit either current model (see Empirical verification), so it is
+  not part of the design.
 - Device choice: ORT defines `device_id` as the **DXGI adapter index**
   (`IDXGIFactory::EnumAdapters`), with 0 always the default adapter — which on
   laptops is often the iGPU. ORT has no adapter names; a named picker needs
@@ -29,11 +27,9 @@ section is a proposal for the spec; it is not a decision.
   RVC already runs RMVPE on `DmlExecutionProvider` in the wild, but registered
   kernel ≠ guaranteed placement: the probe below confirms each graph actually
   runs and measures CPU-vs-GPU on a real model.
-- Costs: the Windows artifact must ship `DirectML.dll` (~18.5 MB) because a DML
-  build carries a load-time dependency on it; redistribution inside an
-  application is permitted by Microsoft's DirectML license terms, with notice
-  duties (see below). A CPU-only user of a DML-enabled build does not "opt
-  out" of the DLL.
+- Costs: the Windows artifact must ship `DirectML.dll` (~18.5 MB, a load-time
+  dependency) with Microsoft's license and third-party notices — even for
+  CPU-only users of a DML-enabled build.
 
 ## What `ort` 2.0.0-rc.13 provides (verified)
 
@@ -42,7 +38,7 @@ section is a proposal for the spec; it is not a decision.
   Windows-only in practice: `ort-sys`'s download table has a `directml` feature
   set only for `*pc-windows-msvc` targets:
   <https://docs.rs/crate/ort-sys/2.0.0-rc.13/source/build/download/dist.tsv>.
-  Non-Windows builds must not enable it.
+  There is no non-Windows DirectML archive, so only Windows builds enable it.
 - Two registration paths (source above):
   - `.with_device_id(i32)` → `SessionOptionsAppendExecutionProvider_DML`
     (legacy; picks the adapter by index). It overrides the filter/preference.
@@ -60,8 +56,8 @@ section is a proposal for the spec; it is not a decision.
   CPU for operations not supported by any other EP. Models with graphs that
   cannot be placed entirely on the EP(s) will fail to commit."
   (<https://docs.rs/ort/2.0.0-rc.13/ort/session/builder/struct.SessionBuilder.html>).
-  This backed the original "no fallback" option; the probe below shows it
-  cannot build either current model, so it is not shipped.
+  Not used by the landed design: the probe below shows it cannot build either
+  current model.
 - `DMLSessionBuilderExt` (same source as the EP) exposes the underlying
   `IDMLDevice` / `ID3D12CommandQueue` after registration. Not needed for v1.
 - `ort::device` / `Environment::devices()` exist for ORT's EP-device discovery
@@ -97,12 +93,11 @@ section is a proposal for the spec; it is not a decision.
 
 ## The Windows binaries and `DirectML.dll` (verified)
 
-- `dist.tsv` (pinned rc.13, ORT 1.28.0) lists for the DML build:
-  `x86_64-pc-windows-msvc  directml  https://cdn.pyke.io/0/pyke:ort-rs/ms@1.28.0/x86_64-pc-windows-msvc+directml.tar.lzma2`
-  (sha256 `f7c654b3…`). Downloading and listing the archive showed exactly two
-  members: `onnxruntime.lib` (341 MB) and **`DirectML.dll`** (18,527,776 bytes;
-  file version `1.15.4+241025-1615.1.dml-1.15.fac7597`, "DirectML
-  Redistributable Library", Microsoft; sha256 `9c9e6d82…`).
+- `dist.tsv` (pinned rc.13, ORT 1.28.0) lists the DML archive
+  `x86_64-pc-windows-msvc+directml.tar.lzma2`; it contains exactly two members,
+  `onnxruntime.lib` and `DirectML.dll` (18,527,776 bytes, "DirectML
+  Redistributable Library" 1.15.4). Hashes and provenance live in
+  `third_party/DirectML/VENDORED.md`.
 - `ort-sys`'s `copy-dylibs` copies `.dll`/`.so`/`.dylib` files from the
   extracted archive into the Cargo target dirs at build time
   (<https://docs.rs/crate/ort-sys/2.0.0-rc.13/source/build/dynamic_link.rs>).
@@ -118,14 +113,15 @@ section is a proposal for the spec; it is not a decision.
 - Consequence for CD: add `target/release/DirectML.dll` to the Windows
   artifact. For CPU-only builds the existing `--no-default-features` (compat)
   artifact is unaffected because it links no ORT.
-- License: `Microsoft.AI.DirectML` 1.15.2 ships `LICENSE.txt` = Microsoft
-  DirectML license terms, §1(a): "you may install and use any number of copies
-  of the software, and solely for use on Windows and Xbox. You may copy and
-  distribute the software … in applications and services you develop…"; the
-  package also has `ThirdPartyNotices.txt` (GSL, half, zstd) that must travel
-  with redistributions, and an MIT `LICENSE-CODE.txt` for the package code.
-  Redistribution in our binaries is fine; `CREDITS.md` needs a manual notice
-  (the `about.toml` pipeline only covers Rust crates).
+- License: the `Microsoft.AI.DirectML` **1.15.4** package ships `LICENSE.txt` =
+  Microsoft DirectML license terms, §1(a): "you may install and use any number
+  of copies of the software, and solely for use on Windows and Xbox. You may
+  copy and distribute the software … in applications and services you
+  develop…"; the package also has `ThirdPartyNotices.txt` (GSL, half, zstd)
+  that must travel with redistributions, and an MIT `LICENSE-CODE.txt` for the
+  package code. Redistribution in our binaries is fine; `CREDITS.md` carries
+  the notice and `third_party/DirectML/` the texts (the `about.toml` pipeline
+  only covers Rust crates).
 
 ## Operator coverage for our two models (verified)
 
@@ -140,9 +136,9 @@ section "Operators implemented by DmlExecutionProvider"):
 | `Conv`, `ConvTranspose` (dynamic pads), `MatMul`, `Softmax`, `Sigmoid`, `Tanh`, `Erf`, `ReduceMean` | covered |
 | `NonZero`, `Range`, `ScatterND`, `Trilu`, `Resize`, `Pad`, `Slice`, `Gather`, `Shape`, `Cast`, control-flow-ish helpers | covered |
 
-Registered kernel ≠ placement guarantee (DML partitions the graph at runtime
-and falls back for unsupported attribute combos), so the strict mode is the
-real test. RMVPE-on-DirectML has a strong in-the-wild precedent: RVC creates
+Registered kernel ≠ placement guarantee: DML partitions the graph at runtime,
+and the probe below is what actually confirmed the two models run.
+RMVPE-on-DirectML has a strong in-the-wild precedent: RVC creates
 its ONNX RMVPE session with `providers=["DmlExecutionProvider"]`
 (<https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/blob/main/infer/rmvpe.py>,
 around the `privateuseone` branch).
@@ -151,7 +147,8 @@ around the `privateuseone` branch).
 
 The `directml_probe` example added alongside this note loaded the real RMVPE
 model (362 MB, local scratch) and the bundled SwiftF0 over the same synthetic
-audio under all three runners, on an integrated DirectX 12 GPU:
+audio under the CPU and DirectML runners (plus the strict mode during the
+probe, before it was dropped), on an integrated DirectX 12 GPU:
 
 | Model | Runner | Session | Output vs CPU | Inference time |
 | --- | --- | --- | --- | --- |
@@ -165,14 +162,13 @@ audio under all three runners, on an integrated DirectX 12 GPU:
 - DirectML works for both models, and the policy-applied f0 matches the CPU
   path to f32 kernel noise. The speedup on an integrated GPU is already ~1.6x
   (RMVPE) and ~10x (SwiftF0); a discrete GPU should widen it.
-- An experimental strict mode (`session.disable_cpu_ep_fallback`, the original
-  sketch's "no fallback") failed for both models with ORT's "This session
-  contains graph nodes that are assigned to the default CPU EP, but fallback to
-  CPU EP has been explicitly disabled by the user." The DML kernel table has
-  `Shape`/`Gather`/`Reshape`/`Where`/etc., so this is the partitioner leaving
-  nodes on the CPU (shape handling under the models' dynamic input axes), not
-  a missing kernel. The option was dropped: DirectML keeps the built-in CPU
-  fallback by design.
+- The experimental strict mode (`session.disable_cpu_ep_fallback`) failed for
+  both models with ORT's "This session contains graph nodes that are assigned
+  to the default CPU EP, but fallback to CPU EP has been explicitly disabled
+  by the user." The DML kernel table has `Shape`/`Gather`/`Reshape`/`Where`
+  etc., so this is the partitioner leaving shape-handling nodes on the CPU
+  under the models' dynamic input axes, not a missing kernel — the mode is
+  unusable for these graphs and was dropped.
 - Timings are single-machine with a fixed 3 s input; first inference includes
   DML graph initialization. RMVPE's mel frames vary per wav, so a batch may
   add per-shape graph work the probe does not show.
@@ -198,7 +194,7 @@ approach demonstrably confuses users, so a DXGI-named list is a differentiator,
 and "Automatic" should stay the default (it is also the only sane choice when
 enumeration fails).
 
-## Design implications (proposal for the spec)
+## Design (as landed)
 
 - **Config surface** (`kirafrqgen-core`): extend `MlConfig` with
   `runner: MlRunner` (`Cpu` default; `DirectMl`) and
@@ -215,43 +211,37 @@ enumeration fails).
   combo — "Automatic" plus `N — <DXGI description>` entries (mark index 0 as
   default), disabled unless DirectML is selected and disabled while a run is
   active. Windows-only; hidden when the build has no DML. Session-only
-  persistence, matching #13. Optionally a "Refresh devices" button.
-- **Device enumeration** (Windows, `cfg(windows)`): add the `windows` crate
-  (`Win32_Graphics_Dxgi`) and walk `IDXGIFactory1::EnumAdapters1` →
-  `DXGI_ADAPTER_DESC1.Description`; index = DML `device_id`. Software adapters
-  (WARP) need a decision; likely exclude. If enumeration fails, offer
-  "Automatic" + numeric fallback.
-- **CLI parity**: `--ml-runner cpu|directml` (+ `--ml-device N`,
-  `--list-ml-devices`), defaulting to CPU. Names open for the spec.
-- **Build gating**: `ort/directml` must be enabled only for Windows builds (no
-  DML dist exists for other targets). Mechanism (target-specific dependency
-  feature vs. explicit feature in Windows CI/CD) to be settled in the spec;
-  non-Windows must keep building and the GUI must compile with the code
-  `cfg`'d out.
-- **CD**: copy `target/release/DirectML.dll` into the Windows artifact; add the
-  Microsoft DirectML notice (EULA + third-party notices) to `CREDITS.md`.
+  persistence, matching #13, with a Refresh devices button.
+- **Device enumeration** (Windows, `cfg(windows)`): the `windows` crate
+  (`Win32_Graphics_Dxgi`) walks `IDXGIFactory1::EnumAdapters1` →
+  `DXGI_ADAPTER_DESC1.Description`; the index is the DML `device_id`. Software
+  adapters (WARP) are excluded. If enumeration fails, the UI offers
+  "Automatic" and shows the reason.
+- **CLI parity**: `--ml-runner cpu|directml`, `--ml-device N` (only with a
+  DirectML runner), `--list-ml-devices`; CPU is the default.
+- **Build gating**: a Windows-only target dependency in
+  `kirafrq-ml-provider`'s manifest enables `ort/directml`; non-Windows builds
+  and the GUI compile unchanged.
+- **CD**: the release workflow copies `target/release/DirectML.dll` and the
+  texts from `third_party/DirectML/` beside the Windows binaries;
+  `CREDITS.md` carries the notice.
 
-## Verification plan
+## Remaining verification
 
-1. Probe example: **done** — `examples/directml_probe` builds both models under
-   the CPU and DirectML runners and reports commit status, output delta and
-   timing (results above). A profiling follow-up could name the exact
-   CPU-assigned nodes.
-2. Benchmark a batch CPU vs DML, including a mixed-length set to expose the
-   per-shape replanning cost; try `.with_memory_pattern(false)` if needed.
-3. CI: compile-only for `directml`; no DML sessions in unit tests (runners have
+1. Benchmark a batch CPU vs DML, including a mixed-length set to expose the
+   per-shape replanning cost; try `.with_memory_pattern(false)` if needed. A
+   profiling follow-up could name the exact CPU-assigned nodes.
+2. CI: compile-only for `directml`; no DML sessions in unit tests (runners have
    no GPU). Keep session-free unit tests for runner mapping and device
    formatting.
-4. Later, a Windows artifact smoke test on a minimal image (no `DirectML.dll`
+3. Later, a Windows artifact smoke test on a minimal image (no `DirectML.dll`
    in `System32`) to prove the bundled DLL is found — the xberg issue shows a
    normal CI image cannot catch that.
 
 ## Open questions
 
-- Automatic semantics: DML2 `HighPerformance` vs `Default`; expose
-  `MinimumPower` too?
-- CLI flag names, and whether `--list-ml-devices` earns its keep in v1.
-- WARP/software adapters in the device list: show or hide?
+- Automatic device semantics: the design uses DML2 `HighPerformance`; should
+  `MinimumPower` (or the choice) be exposed?
 
 ## Sources
 
@@ -266,7 +256,7 @@ enumeration fails).
 - ONNX Runtime session config key `session.disable_cpu_ep_fallback`: <https://github.com/microsoft/onnxruntime/blob/main/include/onnxruntime/core/session/onnxruntime_session_options_config_keys.h>
 - ORT v1.28.0 operator kernels (DML table): <https://github.com/microsoft/onnxruntime/blob/v1.28.0/docs/OperatorKernels.md>
 - DirectML.dll load-time dependency, downstream report: <https://github.com/xberg-io/xberg/issues/1456>
-- DirectML redistributable license: `Microsoft.AI.DirectML` 1.15.2 package (`LICENSE.txt`, `ThirdPartyNotices.txt`), <https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.2>
+- DirectML redistributable license: `Microsoft.AI.DirectML` 1.15.4 package (`LICENSE.txt`, `ThirdPartyNotices.txt`), <https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4>
 - VC Client GPU-selection thread (index UX, DXGI mapping): <https://github.com/w-okada/voice-changer/issues/410>
 - RVC RMVPE on DML: <https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/blob/main/infer/rmvpe.py>
 - sd-webui-amdgpu `--device-id`: <https://github.com/lshqqytiger/stable-diffusion-webui-amdgpu/discussions/149>

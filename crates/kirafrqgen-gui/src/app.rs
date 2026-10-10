@@ -33,6 +33,9 @@ const RECOMMENDED_TUNING_LABEL: &str = "Applies tuning tailored to the workload,
      helps reduce problems like over-voicing on breath and noise. Turn off to use the raw \
      estimator output.";
 
+/// The DirectML device combo's automatic entry.
+const AUTOMATIC_DEVICE_LABEL: &str = "Automatic (high-performance GPU)";
+
 fn estimator_runnable(estimator: Estimator, ml_available: bool) -> bool {
     estimator != Estimator::Rmvpe || ml_available
 }
@@ -42,7 +45,7 @@ fn estimator_runnable(estimator: Estimator, ml_available: bool) -> bool {
 /// enumerated.
 fn device_selection_label(devices: &[MlDevice], selected: Option<u32>) -> String {
     match selected {
-        None => "Automatic (high-performance GPU)".to_owned(),
+        None => AUTOMATIC_DEVICE_LABEL.to_owned(),
         Some(index) => devices
             .iter()
             .find(|device| device.index == index)
@@ -233,8 +236,9 @@ pub struct KiraFrqGenApp {
     advanced_open: bool,
     ml_runner: MlRunner,
     directml_device: Option<u32>,
-    directml_devices: Vec<MlDevice>,
-    directml_devices_error: Option<String>,
+    /// The enumerated adapters, or why they could not be listed; reloaded
+    /// when the Advanced window opens and on Refresh.
+    directml_devices: Result<Vec<MlDevice>, String>,
 
     run: Option<RunSession>,
 }
@@ -270,11 +274,9 @@ impl KiraFrqGenApp {
             credits_open: false,
             credits: None,
             advanced_open: false,
-            // The standing default is the CPU everywhere; DirectML is opt-in.
             ml_runner: MlRunner::Cpu,
             directml_device: None,
-            directml_devices: Vec::new(),
-            directml_devices_error: None,
+            directml_devices: Ok(Vec::new()),
             run: None,
         }
     }
@@ -327,10 +329,10 @@ impl KiraFrqGenApp {
                 recommended_tuning: self.recommended_tuning,
                 ml: MlConfig {
                     runner: self.ml_runner,
-                    directml_device: match self.ml_runner {
-                        // The device only means something for DirectML.
-                        MlRunner::Cpu => None,
-                        MlRunner::DirectMl => self.directml_device,
+                    directml_device: if self.ml_runner.is_directml() {
+                        self.directml_device
+                    } else {
+                        None
                     },
                     ..MlConfig::default()
                 },
@@ -418,21 +420,14 @@ impl KiraFrqGenApp {
     fn reload_directml_devices(&mut self) {
         match kirafrqgen_core::ml_devices() {
             Ok(devices) => {
-                self.directml_devices = devices;
-                self.directml_devices_error = None;
+                if let Some(index) = self.directml_device
+                    && !devices.iter().any(|device| device.index == index)
+                {
+                    self.directml_device = None;
+                }
+                self.directml_devices = Ok(devices);
             }
-            Err(reason) => {
-                self.directml_devices.clear();
-                self.directml_devices_error = Some(reason);
-            }
-        }
-        if let Some(index) = self.directml_device
-            && !self
-                .directml_devices
-                .iter()
-                .any(|device| device.index == index)
-        {
-            self.directml_device = None;
+            Err(reason) => self.directml_devices = Err(reason),
         }
     }
 
@@ -467,20 +462,20 @@ impl KiraFrqGenApp {
                     }
                     ui.label(RichText::new(self.ml_runner.description()).weak());
 
-                    if self.ml_runner != MlRunner::Cpu {
+                    if self.ml_runner.is_directml() {
                         ui.add_space(8.0);
                         ui.label(RichText::new("DIRECTML DEVICE").size(13.0).strong());
-                        let selected =
-                            device_selection_label(&self.directml_devices, self.directml_device);
+                        let devices = self.directml_devices.as_deref().unwrap_or(&[]);
+                        let selected = device_selection_label(devices, self.directml_device);
                         egui::ComboBox::from_id_salt("directml_device")
                             .selected_text(selected)
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut self.directml_device,
                                     None,
-                                    "Automatic (high-performance GPU)",
+                                    AUTOMATIC_DEVICE_LABEL,
                                 );
-                                for device in &self.directml_devices {
+                                for device in devices {
                                     ui.selectable_value(
                                         &mut self.directml_device,
                                         Some(device.index),
@@ -488,7 +483,7 @@ impl KiraFrqGenApp {
                                     );
                                 }
                             });
-                        if let Some(error) = &self.directml_devices_error {
+                        if let Err(error) = &self.directml_devices {
                             ui.label(RichText::new(error).weak());
                         }
                         if ui
@@ -1555,7 +1550,7 @@ mod tests {
         ];
         assert_eq!(
             device_selection_label(&devices, None),
-            "Automatic (high-performance GPU)"
+            AUTOMATIC_DEVICE_LABEL
         );
         assert_eq!(
             device_selection_label(&devices, Some(0)),

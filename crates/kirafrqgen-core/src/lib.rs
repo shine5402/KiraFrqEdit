@@ -98,9 +98,7 @@ pub enum MlRunner {
     /// ONNX Runtime's CPU path; the default everywhere.
     #[default]
     Cpu,
-    /// DirectML (Windows): a DirectX 12 GPU. ONNX Runtime keeps its CPU
-    /// execution provider alongside it, so operations DirectML does not take
-    /// run on the CPU.
+    /// DirectML (Windows): a DirectX 12 GPU.
     DirectMl,
 }
 
@@ -114,6 +112,11 @@ impl MlRunner {
                  run stay on the CPU."
             }
         }
+    }
+
+    /// Whether the DirectML device setting applies to this runner.
+    pub fn is_directml(self) -> bool {
+        matches!(self, MlRunner::DirectMl)
     }
 }
 
@@ -496,13 +499,16 @@ fn ml_policy(config: &F0Config, default_threshold: f64) -> kirafrq_ml_provider::
     }
 }
 
-/// The provider's runner for the config; the device is only consulted
-/// for DirectML.
+/// The provider's session settings for the config: the runner and, for
+/// DirectML, the device.
 #[cfg(feature = "ml")]
-fn ml_runner(config: &F0Config) -> kirafrq_ml_provider::Runner {
-    match config.ml.runner {
-        MlRunner::Cpu => kirafrq_ml_provider::Runner::Cpu,
-        MlRunner::DirectMl => kirafrq_ml_provider::Runner::DirectMl,
+fn ml_session(config: &F0Config) -> kirafrq_ml_provider::SessionConfig {
+    kirafrq_ml_provider::SessionConfig {
+        runner: match config.ml.runner {
+            MlRunner::Cpu => kirafrq_ml_provider::Runner::Cpu,
+            MlRunner::DirectMl => kirafrq_ml_provider::Runner::DirectMl,
+        },
+        directml_device: config.ml.directml_device,
     }
 }
 
@@ -521,7 +527,7 @@ fn build_ml_estimator(
         kirafrq_ml_provider::RMVPE_DEFAULT_CONFIDENCE_THRESHOLD,
     );
     let inner = kirafrq_ml_provider::rmvpe::Rmvpe::new(model_path, policy, jobs)
-        .with_runner(ml_runner(config), config.ml.directml_device);
+        .with_session_config(ml_session(config));
     // Load the session now so an unloadable model is the same early config
     // error as a missing one (#49), not a per-file failure.
     inner
@@ -547,7 +553,7 @@ fn build_swiftf0_estimator(
         kirafrq_ml_provider::SWIFTF0_DEFAULT_CONFIDENCE_THRESHOLD,
     );
     let inner = kirafrq_ml_provider::swiftf0::SwiftF0::new(source, policy, jobs)
-        .with_runner(ml_runner(config), config.ml.directml_device);
+        .with_session_config(ml_session(config));
     inner
         .ensure_session()
         .map_err(|error| GeneratorError::Config(error.to_string()))?;
@@ -877,14 +883,36 @@ mod tests {
         assert_eq!(second.label(), "2 — Discrete GPU");
     }
 
+    #[test]
+    fn only_directml_uses_a_device() {
+        assert!(!MlRunner::Cpu.is_directml());
+        assert!(MlRunner::DirectMl.is_directml());
+    }
+
     #[cfg(feature = "ml")]
     #[test]
-    fn the_ml_runner_maps_onto_the_provider_variants() {
-        let mut config = F0Config::default();
-        assert_eq!(ml_runner(&config), kirafrq_ml_provider::Runner::Cpu);
+    fn the_ml_runner_maps_onto_the_provider_session() {
+        let config = F0Config::default();
+        assert_eq!(
+            ml_session(&config),
+            kirafrq_ml_provider::SessionConfig::default()
+        );
 
-        config.ml.runner = MlRunner::DirectMl;
-        assert_eq!(ml_runner(&config), kirafrq_ml_provider::Runner::DirectMl);
+        let config = F0Config {
+            ml: MlConfig {
+                runner: MlRunner::DirectMl,
+                directml_device: Some(2),
+                ..MlConfig::default()
+            },
+            ..F0Config::default()
+        };
+        assert_eq!(
+            ml_session(&config),
+            kirafrq_ml_provider::SessionConfig {
+                runner: kirafrq_ml_provider::Runner::DirectMl,
+                directml_device: Some(2),
+            }
+        );
     }
 
     #[test]

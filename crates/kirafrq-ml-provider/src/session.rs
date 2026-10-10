@@ -1,6 +1,6 @@
 //! The process-wide ONNX Runtime session shared by every model path
 //! (#48/#69): one session, built lazily behind a mutex and rebuilt only when
-//! the model source, the thread count or the ML runner changes.
+//! the model source, the thread count or the runner/device settings change.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -81,10 +81,6 @@ fn build(source: &ModelSource, jobs: usize, config: SessionConfig) -> Result<Cac
 
 /// Register the execution provider [`SessionConfig`] selects. `Cpu` registers
 /// nothing: ONNX Runtime's implicit CPU execution provider is the default.
-///
-/// A DirectML session keeps ONNX Runtime's CPU fallback: operations the
-/// DirectML EP does not take, and a dispatch that cannot register at all, run
-/// on the CPU rather than failing the run.
 fn with_runner(builder: SessionBuilder, config: SessionConfig) -> Result<SessionBuilder, Error> {
     match config.runner {
         Runner::Cpu => Ok(builder),

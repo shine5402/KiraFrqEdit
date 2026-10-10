@@ -122,7 +122,7 @@ impl Cli {
         #[cfg(feature = "ml")]
         {
             config.ml.runner = self.ml_runner.map_or(MlRunner::Cpu, MlRunner::from);
-            if config.ml.runner != MlRunner::Cpu {
+            if config.ml.runner.is_directml() {
                 config.ml.directml_device = self.ml_device;
             }
         }
