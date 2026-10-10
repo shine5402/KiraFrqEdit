@@ -32,6 +32,28 @@ fn run(cli: Cli) -> u8 {
         print!("{credits}");
         return 0;
     }
+    if let Err(message) = cli.validate_ml_flags() {
+        eprintln!("error: {message}");
+        return 2;
+    }
+    if cli.list_ml_devices {
+        return match kirafrqgen_core::ml_devices() {
+            Ok(devices) if devices.is_empty() => {
+                eprintln!("error: no DirectML adapters found");
+                1
+            }
+            Ok(devices) => {
+                for device in devices {
+                    println!("{}", device.label());
+                }
+                0
+            }
+            Err(reason) => {
+                eprintln!("error: {reason}");
+                1
+            }
+        };
+    }
     let path = cli
         .path
         .clone()

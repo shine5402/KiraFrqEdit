@@ -7,8 +7,9 @@
 //! - **Model-free** (always compiled): the 44.1 kHz -> 16 kHz resample
 //!   ([`resample_to_model_rate`]; #47), the native-contour -> 5.805 ms
 //!   table-grid mapping ([`map_to_table_grid`]; #47), the native-grid
-//!   voiced/unvoiced policy ([`UvPolicy`]; #53) and model-file resolution
-//!   ([`resolve_model`]/[`resolve_file`]; #48/#69).
+//!   voiced/unvoiced policy ([`UvPolicy`]; #53), model-file resolution
+//!   ([`resolve_model`]/[`resolve_file`]; #48/#69) and the ML runner
+//!   selection with the DirectML adapter list ([`runner`]).
 //! - **Models** (`ort` on): the ONNX Runtime session, RMVPE's log-mel
 //!   frontend and salience decoder under [`rmvpe`], and SwiftF0's raw-audio
 //!   adapter under [`swiftf0`] (#69). Every `ort` call lives there.
@@ -20,6 +21,7 @@ pub mod grid;
 pub mod model;
 pub mod policy;
 pub mod resample;
+pub mod runner;
 
 #[cfg(feature = "ort")]
 #[doc(hidden)]
@@ -43,6 +45,9 @@ pub use policy::{
     RMVPE_DEFAULT_CONFIDENCE_THRESHOLD, SWIFTF0_DEFAULT_CONFIDENCE_THRESHOLD, UvPolicy,
 };
 pub use resample::resample_to_model_rate;
+pub use runner::{
+    DIRECTML_SUPPORTED, DeviceError, DirectMlDevice, Runner, SessionConfig, directml_devices,
+};
 
 /// Coarse per-file progress out of an ML estimate (#34/#48): one tick per
 /// stage, `done` of `total`. `kirafrqgen-core` adapts its frame observer onto

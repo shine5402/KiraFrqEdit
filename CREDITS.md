@@ -18,6 +18,12 @@ and Y. Chen ([Interspeech 2023](https://arxiv.org/abs/2306.15412)) and
 The RMVPE model weights are not redistributed with this project; you supply `rmvpe.onnx`
 yourself. SwiftF0 ships its model bundled (see the README).
 
+The Windows builds bundle Microsoft's [DirectML](https://github.com/microsoft/DirectML)
+redistributable runtime (`DirectML.dll`) for GPU inference. Copyright © Microsoft
+Corporation; distributed under the Microsoft DirectML license terms, which permit copying
+and distribution in applications. The full license text and third-party notices are in
+[`third_party/DirectML/`](third_party/DirectML) and ship beside the Windows binaries.
+
 ## License
 
 KiraFrqGen is [MIT](LICENSE).

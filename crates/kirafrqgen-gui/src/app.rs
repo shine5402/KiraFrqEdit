@@ -14,8 +14,9 @@ use eframe::egui::{
 };
 use egui_phosphor::regular as icons;
 use kirafrqgen_core::{
-    CancelToken, Estimator, F0Config, FileReport, GenerateOptions, Progress, RunSummary, Sharing,
-    Target, build_estimator, generate_wavs, ml_available, plan,
+    CancelToken, DIRECTML_SUPPORTED, Estimator, F0Config, FileReport, GenerateOptions, MlConfig,
+    MlDevice, MlRunner, Progress, RunSummary, Sharing, Target, build_estimator, generate_wavs,
+    ml_available, plan,
 };
 
 use crate::run::{Row, RunState, Status};
@@ -32,8 +33,20 @@ const RECOMMENDED_TUNING_LABEL: &str = "Applies tuning tailored to the workload,
      helps reduce problems like over-voicing on breath and noise. Turn off to use the raw \
      estimator output.";
 
+/// The DirectML device combo's automatic entry.
+const AUTOMATIC_DEVICE_LABEL: &str = "Automatic (high-performance GPU)";
+
 fn estimator_runnable(estimator: Estimator, ml_available: bool) -> bool {
     estimator != Estimator::Rmvpe || ml_available
+}
+
+/// The DirectML device combo's selected text: `Automatic` or the named
+/// adapter. A selection that is no longer enumerated cannot be shown; the
+/// reload that follows enumeration resets it to automatic.
+fn device_selection_label(devices: &[MlDevice], selected: Option<u32>) -> String {
+    selected
+        .and_then(|index| devices.iter().find(|device| device.index == index))
+        .map_or_else(|| AUTOMATIC_DEVICE_LABEL.to_owned(), MlDevice::label)
 }
 
 /// Lock the run state, recovering a poisoned mutex: a panicked worker must not
@@ -214,6 +227,15 @@ pub struct KiraFrqGenApp {
     credits_open: bool,
     credits: Option<crate::credits::CreditsView>,
 
+    /// The hamburger's Advanced window: the ML runner and the DirectML
+    /// device, session-only like every other setting (#13).
+    advanced_open: bool,
+    ml_runner: MlRunner,
+    directml_device: Option<u32>,
+    /// The enumerated adapters, or why they could not be listed; reloaded
+    /// when the Advanced window opens and on Refresh.
+    directml_devices: Result<Vec<MlDevice>, String>,
+
     run: Option<RunSession>,
 }
 
@@ -247,6 +269,10 @@ impl KiraFrqGenApp {
             clipboard: PathClipboard::default(),
             credits_open: false,
             credits: None,
+            advanced_open: false,
+            ml_runner: MlRunner::Cpu,
+            directml_device: None,
+            directml_devices: Ok(Vec::new()),
             run: None,
         }
     }
@@ -297,6 +323,15 @@ impl KiraFrqGenApp {
             f0: F0Config {
                 estimator: self.estimator,
                 recommended_tuning: self.recommended_tuning,
+                ml: MlConfig {
+                    runner: self.ml_runner,
+                    directml_device: if self.ml_runner.is_directml() {
+                        self.directml_device
+                    } else {
+                        None
+                    },
+                    ..MlConfig::default()
+                },
                 ..F0Config::default()
             },
             jobs: if self.cores_auto {
@@ -376,6 +411,101 @@ impl KiraFrqGenApp {
         self.credits_open = open;
     }
 
+    /// Re-enumerate the DirectML adapters for the device picker; a selection
+    /// that disappeared falls back to automatic.
+    fn reload_directml_devices(&mut self) {
+        match kirafrqgen_core::ml_devices() {
+            Ok(devices) => {
+                if let Some(index) = self.directml_device
+                    && !devices.iter().any(|device| device.index == index)
+                {
+                    self.directml_device = None;
+                }
+                self.directml_devices = Ok(devices);
+            }
+            Err(reason) => self.directml_devices = Err(reason),
+        }
+    }
+
+    /// The hamburger's Advanced window: the ML runner and, for DirectML, the
+    /// adapter. The device list is enumerated when the window is opened and
+    /// on Refresh; `Automatic` always stays available when enumeration fails.
+    fn advanced_window(&mut self, ctx: &egui::Context) {
+        if !self.advanced_open {
+            return;
+        }
+        let mut open = self.advanced_open;
+        let mut refresh = false;
+        egui::Window::new("Advanced settings")
+            .open(&mut open)
+            .default_size([460.0, 260.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                if !kirafrqgen_core::ML_SUPPORTED {
+                    ui.label(RichText::new("This build has no ML estimator support.").weak());
+                    return;
+                }
+                ui.add_enabled_ui(!self.is_running(), |ui| {
+                    ui.label(RichText::new("ML RUNNER").size(13.0).strong());
+                    ui.radio_value(&mut self.ml_runner, MlRunner::Cpu, "CPU");
+                    if DIRECTML_SUPPORTED {
+                        ui.radio_value(&mut self.ml_runner, MlRunner::DirectMl, "DirectML");
+                    } else {
+                        ui.label(
+                            RichText::new("DirectML is only available in Windows ML builds.")
+                                .weak(),
+                        );
+                    }
+                    ui.label(RichText::new(self.ml_runner.description()).weak());
+
+                    if self.ml_runner.is_directml() {
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("DIRECTML DEVICE").size(13.0).strong());
+                        let devices = self.directml_devices.as_deref().unwrap_or(&[]);
+                        let selected = device_selection_label(devices, self.directml_device);
+                        egui::ComboBox::from_id_salt("directml_device")
+                            .selected_text(selected)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.directml_device,
+                                    None,
+                                    AUTOMATIC_DEVICE_LABEL,
+                                );
+                                for device in devices {
+                                    ui.selectable_value(
+                                        &mut self.directml_device,
+                                        Some(device.index),
+                                        device.label(),
+                                    );
+                                }
+                            });
+                        if let Err(error) = &self.directml_devices {
+                            ui.label(RichText::new(error).weak());
+                        }
+                        if ui
+                            .button(format!("{} Refresh devices", icons::ARROWS_CLOCKWISE))
+                            .clicked()
+                        {
+                            refresh = true;
+                        }
+                    }
+
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(
+                            "The runner applies to RMVPE and SwiftF0; the WORLD estimators \
+                             always use the CPU.",
+                        )
+                        .weak(),
+                    );
+                });
+            });
+        if refresh {
+            self.reload_directml_devices();
+        }
+        self.advanced_open = open;
+    }
+
     /// Hand the selected wavs to the real pipeline on a worker thread.
     fn start_run(&mut self, ctx: &egui::Context) {
         let Some(tree) = &self.tree else {
@@ -423,11 +553,16 @@ impl KiraFrqGenApp {
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         let running = self.is_running();
         let mut open_credits = false;
+        let mut open_advanced = false;
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("KiraFrqGen").size(22.0).strong());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.menu_button(icons::LIST, |ui| {
+                    if ui.button("Advanced…").clicked() {
+                        ui.close();
+                        open_advanced = true;
+                    }
                     ui.menu_button("Help", |ui| {
                         if ui.button("Credits").clicked() {
                             ui.close();
@@ -436,9 +571,13 @@ impl KiraFrqGenApp {
                     });
                 })
                 .response
-                .on_hover_text("Help");
+                .on_hover_text("Menu");
             });
         });
+        if open_advanced {
+            self.advanced_open = true;
+            self.reload_directml_devices();
+        }
         if open_credits {
             self.credits_open = true;
             self.credits.get_or_insert_with(|| {
@@ -972,6 +1111,7 @@ impl eframe::App for KiraFrqGenApp {
             self.overlay(ui.ctx());
         }
         self.credits_window(ui.ctx());
+        self.advanced_window(ui.ctx());
         if self.is_running() {
             ui.ctx().request_repaint();
         }
@@ -1390,6 +1530,32 @@ mod tests {
     #[test]
     fn the_model_hint_links_to_the_readme_model_section() {
         assert!(MODEL_HELP_URL.contains("README.md#ml-model"));
+    }
+
+    #[test]
+    fn the_device_label_names_the_adapter_or_falls_back_to_the_index() {
+        let devices = vec![
+            MlDevice {
+                index: 0,
+                name: "Integrated Graphics".to_owned(),
+            },
+            MlDevice {
+                index: 2,
+                name: "Discrete GPU".to_owned(),
+            },
+        ];
+        assert_eq!(
+            device_selection_label(&devices, None),
+            AUTOMATIC_DEVICE_LABEL
+        );
+        assert_eq!(
+            device_selection_label(&devices, Some(0)),
+            "0 — Integrated Graphics (default)"
+        );
+        assert_eq!(
+            device_selection_label(&devices, Some(2)),
+            "2 — Discrete GPU"
+        );
     }
 
     #[test]

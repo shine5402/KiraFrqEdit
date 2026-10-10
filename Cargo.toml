@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 publish = false
 repository = "https://github.com/shine5402/KiraFrqEdit"
@@ -27,12 +27,15 @@ cc = "=1.4.6"
 # RMVPE's log-mel frontend (#57); pairs with the ort pin below.
 realfft = "=3.5.0"
 # ML provider (#48): ONNX Runtime, statically linked; rustls TLS for the
-# build-time archive download (no copy-dylibs, no dylib lookup). Exact pin.
+# build-time archive download. Exact pin. `copy-dylibs` seeds the Windows
+# DirectML runtime (`DirectML.dll`) next to the binaries; statically
+# linked ONNX Runtime itself still has no dylib lookup.
 ort = { version = "=2.0.0-rc.13", default-features = false, features = [
     "std",
     "download-binaries",
     "tls-rustls",
     "api-27",
+    "copy-dylibs",
 ] }
 
 # The mrq sharing flag's local-code-page conversion (#16); WHATWG Shift_JIS and
@@ -50,6 +53,8 @@ egui-phosphor = "0.14"
 # Reading the clipboard for the path field's context menu (#32); egui only
 # writes to it, and eframe's own arboard copy is not exposed to apps.
 arboard = { version = "3", default-features = false }
+# DXGI adapter enumeration for the DirectML device picker (Windows only).
+windows = "0.62"
 
 kirafrq-formats = { path = "crates/kirafrq-formats" }
 kirafrq-audio = { path = "crates/kirafrq-audio" }

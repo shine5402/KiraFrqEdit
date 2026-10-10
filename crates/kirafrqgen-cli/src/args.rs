@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
+#[cfg(feature = "ml")]
+use kirafrqgen_core::MlRunner;
 use kirafrqgen_core::{Estimator, F0Config, Target};
 
 /// Bulk-generate frq tables for your UTAU voicebank.
@@ -15,7 +17,7 @@ use kirafrqgen_core::{Estimator, F0Config, Target};
 )]
 pub struct Cli {
     /// A voicebank folder (recursive scan) or a single .wav file.
-    #[arg(value_name = "PATH", required_unless_present_any = ["license", "license_full"])]
+    #[arg(value_name = "PATH", required_unless_present_any = ["license", "license_full", "list_ml_devices"])]
     pub path: Option<PathBuf>,
 
     /// Table formats to write: frq, pmk, mrq (comma-separated, repeatable).
@@ -26,6 +28,18 @@ pub struct Cli {
     /// present, else SwiftF0 in an ML build, else Harvest.
     #[arg(long, value_enum)]
     pub estimator: Option<EstimatorArg>,
+
+    /// ML execution provider for RMVPE and SwiftF0: `cpu` (default) or
+    /// `directml` (Windows; operations DirectML cannot run stay on the CPU).
+    #[cfg(feature = "ml")]
+    #[arg(long, value_enum, value_name = "RUNNER")]
+    pub ml_runner: Option<MlRunnerArg>,
+
+    /// DirectML adapter index (list them with `--list-ml-devices`); omit for
+    /// automatic (high-performance GPU).
+    #[cfg(feature = "ml")]
+    #[arg(long, value_name = "N", requires = "ml_runner")]
+    pub ml_device: Option<u32>,
 
     /// Apply tuning tailored to the workload, which helps reduce problems like
     /// over-voicing on breath and noise. Turn off to use the raw estimator
@@ -80,6 +94,10 @@ pub struct Cli {
     /// Like `--license`, but with the full text of every dependency license.
     #[arg(long)]
     pub license_full: bool,
+
+    /// List the DirectML adapters this machine offers, then exit.
+    #[arg(long, conflicts_with_all = ["license", "license_full"])]
+    pub list_ml_devices: bool,
 }
 
 impl Cli {
@@ -92,14 +110,34 @@ impl Cli {
         targets
     }
 
-    /// The standing f0 defaults (#7/#8) with the resolved estimator and the
-    /// recommended-tuning toggle (#49/#71).
+    /// The standing f0 defaults (#7/#8) with the resolved estimator, the
+    /// recommended-tuning toggle (#49/#71) and the ML runner.
     pub fn f0_config(&self) -> F0Config {
-        F0Config {
+        #[cfg_attr(not(feature = "ml"), allow(unused_mut))]
+        let mut config = F0Config {
             estimator: self.estimator(),
             recommended_tuning: !self.no_recommended_tuning,
             ..F0Config::default()
+        };
+        #[cfg(feature = "ml")]
+        {
+            config.ml.runner = self.ml_runner.map_or(MlRunner::Cpu, MlRunner::from);
+            if config.ml.runner.is_directml() {
+                config.ml.directml_device = self.ml_device;
+            }
         }
+        config
+    }
+
+    /// Reject `--ml-device` for a runner that has no devices. clap enforces
+    /// that some `--ml-runner` is present (`requires`); only which value it
+    /// has can be checked here.
+    pub fn validate_ml_flags(&self) -> Result<(), String> {
+        #[cfg(feature = "ml")]
+        if self.ml_device.is_some() && !matches!(self.ml_runner, Some(MlRunnerArg::DirectMl)) {
+            return Err("--ml-device needs --ml-runner directml".to_string());
+        }
+        Ok(())
     }
 
     /// The capability-aware default (#49/#71): RMVPE when the build has ML and
@@ -189,6 +227,41 @@ impl From<EstimatorArg> for Estimator {
             EstimatorArg::Rmvpe => Estimator::Rmvpe,
             #[cfg(feature = "ml")]
             EstimatorArg::SwiftF0 => Estimator::SwiftF0,
+        }
+    }
+}
+
+/// The `--ml-runner` value. Only compiled into ML builds, like the
+/// `rmvpe`/`swiftf0` estimator values.
+#[cfg(feature = "ml")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MlRunnerArg {
+    Cpu,
+    DirectMl,
+}
+
+#[cfg(feature = "ml")]
+impl clap::ValueEnum for MlRunnerArg {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Cpu, Self::DirectMl]
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        let name = match self {
+            MlRunnerArg::Cpu => "cpu",
+            MlRunnerArg::DirectMl => "directml",
+        };
+        let runner = MlRunner::from(*self);
+        Some(clap::builder::PossibleValue::new(name).help(runner.description()))
+    }
+}
+
+#[cfg(feature = "ml")]
+impl From<MlRunnerArg> for MlRunner {
+    fn from(value: MlRunnerArg) -> Self {
+        match value {
+            MlRunnerArg::Cpu => MlRunner::Cpu,
+            MlRunnerArg::DirectMl => MlRunner::DirectMl,
         }
     }
 }
@@ -325,6 +398,67 @@ mod tests {
         assert_eq!(
             parse_ok(&["bank", "--estimator", "dio"]).estimator(),
             Estimator::Dio
+        );
+    }
+
+    #[cfg(feature = "ml")]
+    #[test]
+    fn ml_runner_defaults_to_the_cpu_and_accepts_every_name() {
+        let plain = parse_ok(&["bank"]).f0_config();
+        assert_eq!(plain.ml.runner, MlRunner::Cpu);
+        assert_eq!(plain.ml.directml_device, None);
+
+        for (name, runner) in [("cpu", MlRunner::Cpu), ("directml", MlRunner::DirectMl)] {
+            assert_eq!(
+                parse_ok(&["bank", "--ml-runner", name])
+                    .f0_config()
+                    .ml
+                    .runner,
+                runner,
+                "{name}"
+            );
+        }
+
+        let error = parse(&["bank", "--ml-runner", "vulkan"]).unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+    }
+
+    #[cfg(feature = "ml")]
+    #[test]
+    fn ml_device_is_carried_only_by_the_directml_runners() {
+        let cli = parse_ok(&["bank", "--ml-runner", "directml", "--ml-device", "1"]);
+        assert!(cli.validate_ml_flags().is_ok());
+        assert_eq!(cli.f0_config().ml.directml_device, Some(1));
+
+        // clap rejects a device without any runner...
+        let error = parse(&["bank", "--ml-device", "1"]).unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+
+        // ...and the cross-value check rejects it under the CPU runner.
+        let cli = parse_ok(&["bank", "--ml-runner", "cpu", "--ml-device", "1"]);
+        assert!(cli.validate_ml_flags().is_err());
+        assert_eq!(
+            cli.f0_config().ml.directml_device,
+            None,
+            "a device without a DirectML runner is dropped"
+        );
+    }
+
+    #[test]
+    fn the_compat_build_has_no_ml_runner_flags() {
+        #[cfg(not(feature = "ml"))]
+        for args in [
+            &["bank", "--ml-runner", "cpu"][..],
+            &["bank", "--ml-device", "1"][..],
+        ] {
+            let error = parse(args).unwrap_err();
+            assert_eq!(error.exit_code(), 2, "{args:?}");
+        }
+        #[cfg(feature = "ml")]
+        assert!(
+            parse_ok(&["bank", "--ml-runner", "cpu"])
+                .ml_runner
+                .is_some()
         );
     }
 

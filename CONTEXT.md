@@ -39,6 +39,14 @@ An f0 estimator backed by a neural model rather than a DSP algorithm. It has no 
 RMVPE and SwiftF0 are the supported ones; RMVPE's voicing comes from the model's own confidence,
 while SwiftF0's is shaped by the energy voicing gate. _Avoid_: calling it a "resampler" or "engine".
 
+## ML runner
+
+Which ONNX Runtime execution provider runs the ML estimators: CPU (default, every build) or
+DirectML (Windows ML builds: a DirectX 12 GPU, selectable by DXGI adapter index, or automatic).
+ONNX Runtime keeps its CPU execution provider alongside DirectML, so operations DirectML does not
+take run on the CPU. GUI: hamburger menu > Advanced settings; CLI: `--ml-runner`. _Avoid_:
+"backend" or "provider" alone for this setting.
+
 ## Model file
 
 The weights file an ML estimator loads. RMVPE's `rmvpe.onnx` is user-supplied, looked up in the

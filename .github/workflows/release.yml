@@ -44,10 +44,23 @@ jobs:
           sudo apt-get install -y libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
       - name: cargo build --release
         run: cargo build --release --bins --locked
+      # The DirectML runtime must sit beside the Windows binaries in the
+      # uploaded artifact, and the license texts that accompany it come along
+      # (see third_party/DirectML); one staging directory keeps upload-artifact
+      # from splitting the files across archive paths.
+      - name: Stage release files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/kirafrqgen-cli${{ matrix.exe-suffix }} dist/
+          Copy-Item target/release/kirafrqgen-gui${{ matrix.exe-suffix }} dist/
+          if ($env:RUNNER_OS -eq 'Windows') {
+            Copy-Item target/release/DirectML.dll dist/
+            Copy-Item third_party/DirectML/LICENSE.txt dist/DirectML.LICENSE.txt
+            Copy-Item third_party/DirectML/ThirdPartyNotices.txt dist/DirectML.ThirdPartyNotices.txt
+          }
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
           name: kirafrqgen-${{ matrix.name }}
-          path: |
-            target/release/kirafrqgen-cli${{ matrix.exe-suffix }}
-            target/release/kirafrqgen-gui${{ matrix.exe-suffix }}
+          path: dist/*
