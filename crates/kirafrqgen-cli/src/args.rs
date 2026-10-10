@@ -29,8 +29,9 @@ pub struct Cli {
     #[arg(long, value_enum)]
     pub estimator: Option<EstimatorArg>,
 
-    /// ML execution provider for RMVPE and SwiftF0: `cpu` (default) or
-    /// `directml` (Windows; operations DirectML cannot run stay on the CPU).
+    /// ML execution provider for RMVPE and SwiftF0: `cpu` or `directml`
+    /// (Windows, DirectX 12 GPU). DirectML when this machine can use it,
+    /// else CPU.
     #[cfg(feature = "ml")]
     #[arg(long, value_enum, value_name = "RUNNER")]
     pub ml_runner: Option<MlRunnerArg>,
@@ -121,7 +122,10 @@ impl Cli {
         };
         #[cfg(feature = "ml")]
         {
-            config.ml.runner = self.ml_runner.map_or(MlRunner::Cpu, MlRunner::from);
+            config.ml.runner = self.ml_runner.map_or_else(
+                || kirafrqgen_core::default_ml_runner(kirafrqgen_core::directml_usable()),
+                MlRunner::from,
+            );
             if config.ml.runner.is_directml() {
                 config.ml.directml_device = self.ml_device;
             }
@@ -403,9 +407,14 @@ mod tests {
 
     #[cfg(feature = "ml")]
     #[test]
-    fn ml_runner_defaults_to_the_cpu_and_accepts_every_name() {
+    fn ml_runner_defaults_to_directml_when_usable_and_accepts_every_name() {
         let plain = parse_ok(&["bank"]).f0_config();
-        assert_eq!(plain.ml.runner, MlRunner::Cpu);
+        let expected = if kirafrqgen_core::directml_usable() {
+            MlRunner::DirectMl
+        } else {
+            MlRunner::Cpu
+        };
+        assert_eq!(plain.ml.runner, expected);
         assert_eq!(plain.ml.directml_device, None);
 
         for (name, runner) in [("cpu", MlRunner::Cpu), ("directml", MlRunner::DirectMl)] {

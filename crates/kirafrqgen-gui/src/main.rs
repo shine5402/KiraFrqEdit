@@ -25,7 +25,7 @@ fn main() -> eframe::Result<()> {
             egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
             add_cjk_fallback(&mut fonts);
             cc.egui_ctx.set_fonts(fonts);
-            Ok(Box::new(KiraFrqGenApp::new()))
+            Ok(Box::new(KiraFrqGenApp::new(cc.storage)))
         }),
     )
 }

@@ -20,6 +20,7 @@ ml = ["kirafrqgen-core/ml"]
 kirafrqgen-core = { workspace = true, default-features = false }
 kirafrq-credits.workspace = true
 eframe.workspace = true
+serde.workspace = true
 rfd.workspace = true
 egui-phosphor.workspace = true
 arboard.workspace = true

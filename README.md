@@ -24,13 +24,15 @@ license for the bundled model is next to it at
 
 ## GPU runner (Windows)
 
-The ML estimators can run on a DirectX 12 GPU through DirectML. The GUI exposes it under
-the hamburger menu's Advanced settings; on the CLI:
+The ML estimators run on a DirectX 12 GPU through DirectML when the machine has one; the
+CPU is the fallback. The GUI's Advanced settings (hamburger menu) pick the runner and
+adapter, and remember the choice across restarts. On the CLI:
 
 ```
 kirafrqgen-cli --list-ml-devices                        # adapters and their indices
-kirafrqgen-cli bank --ml-runner directml                # automatic (high-performance GPU)
-kirafrqgen-cli bank --ml-runner directml --ml-device 1  # a specific adapter
+kirafrqgen-cli bank                                     # DirectML when available, else CPU
+kirafrqgen-cli bank --ml-runner cpu                     # force the processor
+kirafrqgen-cli bank --ml-runner directml --ml-device 1  # pin a specific adapter
 ```
 
 ONNX Runtime keeps its CPU execution provider alongside DirectML, so operations DirectML

@@ -197,7 +197,8 @@ enumeration fails).
 ## Design (as landed)
 
 - **Config surface** (`kirafrqgen-core`): extend `MlConfig` with
-  `runner: MlRunner` (`Cpu` default; `DirectMl`) and
+  `runner: MlRunner` (`Cpu`/`DirectMl`; the front ends resolve a capability-aware
+  default — DirectML when the machine can use it, else CPU) and
   `directml_device: Option<u32>` (`None` = automatic). WORLD estimators ignore
   both. `kirafrq-ml-provider` maps the neutral choice onto its session builder
   (it must keep not depending on core), and `session.rs`'s cache key gains
@@ -210,7 +211,9 @@ enumeration fails).
   Credits one: ML runner radios (CPU / DirectML) and, for DirectML, a
   "DirectML device" combo — "Automatic" plus `N — <DXGI description>` entries
   (index 0 marked default) and a Refresh devices button. Windows-only; hidden
-  when the build has no DML. Session-only persistence, matching #13.
+  when the build has no DML. The runner and device persist across restarts
+  through eframe's storage in the user's app-data directory; every other
+  setting stays session-only (#13).
 - **Device enumeration** (Windows, `cfg(windows)`): the `windows` crate
   (`Win32_Graphics_Dxgi`) walks `IDXGIFactory1::EnumAdapters1` →
   `DXGI_ADAPTER_DESC1.Description`; the index is the DML `device_id`. Software
@@ -218,7 +221,8 @@ enumeration fails).
   "Automatic" and shows the reason; raw indices stay available through the
   CLI's `--ml-device`.
 - **CLI parity**: `--ml-runner cpu|directml`, `--ml-device N` (only with a
-  DirectML runner), `--list-ml-devices`; CPU is the default.
+  DirectML runner), `--list-ml-devices`; the default is capability-aware —
+  DirectML when usable, else CPU.
 - **Build gating**: a Windows-only target dependency in
   `kirafrq-ml-provider`'s manifest enables `ort/directml`; non-Windows builds
   and the GUI compile unchanged.

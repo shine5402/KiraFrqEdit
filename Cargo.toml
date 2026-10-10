@@ -46,7 +46,11 @@ rayon = "1.12"
 clap = { version = "4", features = ["derive"] }
 # Ctrl-C cancellation for the CLI (#12: exit 130 with a partial summary).
 ctrlc = "3"
-eframe = "0.36"
+# The GUI's persistence feature keeps the Advanced settings (and the window
+# placement) under the user's app-data directory.
+eframe = { version = "0.36", features = ["persistence"] }
+# The GUI's persisted settings serialize through eframe's storage.
+serde = { version = "1", features = ["derive"] }
 # GUI dependencies (#23): native folder picker and Phosphor icons.
 rfd = "0.17"
 egui-phosphor = "0.14"
