@@ -95,7 +95,7 @@ pub fn default_estimator(rmvpe_available: bool) -> Estimator {
 /// variant and rejects it at [`build_estimator`] time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MlRunner {
-    /// ONNX Runtime's CPU path; the default everywhere.
+    /// ONNX Runtime's CPU path; the fallback wherever DirectML cannot run.
     #[default]
     Cpu,
     /// DirectML (Windows): a DirectX 12 GPU.
@@ -106,11 +106,8 @@ impl MlRunner {
     /// The user-facing one-liner the front ends show for this runner.
     pub fn description(self) -> &'static str {
         match self {
-            MlRunner::Cpu => "Runs the ML estimators on the processor. The safe default.",
-            MlRunner::DirectMl => {
-                "Runs the ML estimators on a DirectX 12 GPU. Operations DirectML cannot \
-                 run stay on the CPU."
-            }
+            MlRunner::Cpu => "Runs the ML estimators on the processor.",
+            MlRunner::DirectMl => "Runs the ML estimators on a DirectX 12 GPU.",
         }
     }
 
@@ -188,6 +185,26 @@ pub fn ml_devices() -> Result<Vec<MlDevice>, String> {
     #[cfg(not(feature = "ml"))]
     {
         Err("this build has no ML support".to_string())
+    }
+}
+
+/// Whether the DirectML runner can run here: a Windows ML build with at least
+/// one hardware adapter. DirectML keeps ONNX Runtime's CPU path alongside it,
+/// so a host that fails this check is served by the CPU runner instead.
+pub fn directml_usable() -> bool {
+    DIRECTML_SUPPORTED && ml_devices().is_ok_and(|devices| !devices.is_empty())
+}
+
+/// The capability-aware ML runner default: DirectML when [`directml_usable`],
+/// else CPU. The front ends resolve this once at startup; an explicit choice
+/// always wins.
+///
+/// `directml_available` is [`directml_usable`]'s result.
+pub fn default_ml_runner(directml_available: bool) -> MlRunner {
+    if directml_available {
+        MlRunner::DirectMl
+    } else {
+        MlRunner::Cpu
     }
 }
 
@@ -866,6 +883,12 @@ mod tests {
         for runner in [MlRunner::Cpu, MlRunner::DirectMl] {
             assert!(!runner.description().is_empty());
         }
+    }
+
+    #[test]
+    fn the_ml_runner_default_prefers_directml_when_usable() {
+        assert_eq!(default_ml_runner(true), MlRunner::DirectMl);
+        assert_eq!(default_ml_runner(false), MlRunner::Cpu);
     }
 
     #[test]

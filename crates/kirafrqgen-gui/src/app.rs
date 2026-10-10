@@ -1,6 +1,8 @@
 //! The KiraFrqGen window (#23): shell B from #13 — options sidebar, drop area
 //! that becomes a tri-state wav tree, and an in-place run view fed by the
-//! pipeline's progress events. Settings live for the session only (#13).
+//! pipeline's progress events. Settings live for the session only (#13),
+//! except the Advanced window's runner and device, which eframe's storage
+//! keeps in the user's app-data directory.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -15,8 +17,8 @@ use eframe::egui::{
 use egui_phosphor::regular as icons;
 use kirafrqgen_core::{
     CancelToken, DIRECTML_SUPPORTED, Estimator, F0Config, FileReport, GenerateOptions, MlConfig,
-    MlDevice, MlRunner, Progress, RunSummary, Sharing, Target, build_estimator, generate_wavs,
-    ml_available, plan,
+    MlDevice, MlRunner, Progress, RunSummary, Sharing, Target, build_estimator, default_ml_runner,
+    directml_usable, generate_wavs, ml_available, plan,
 };
 
 use crate::run::{Row, RunState, Status};
@@ -35,6 +37,58 @@ const RECOMMENDED_TUNING_LABEL: &str = "Applies tuning tailored to the workload,
 
 /// The DirectML device combo's automatic entry.
 const AUTOMATIC_DEVICE_LABEL: &str = "Automatic (high-performance GPU)";
+
+/// The key the Advanced settings live under in eframe's storage.
+const ADVANCED_STORAGE_KEY: &str = "advanced";
+
+/// The Advanced window's settings that survive a restart: the ML runner and,
+/// for DirectML, the adapter. eframe's persistence keeps the store in the
+/// user's app-data directory (`%APPDATA%\KiraFrqGen\data\app.ron` on Windows).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct AdvancedSettings {
+    /// The DirectML runner was selected.
+    directml: bool,
+    /// The DirectML adapter index; `None` is the automatic choice.
+    directml_device: Option<u32>,
+}
+
+impl AdvancedSettings {
+    /// Read the stored settings, or the capability-aware first-run default
+    /// (DirectML when `directml_usable`, else CPU). A stored DirectML choice
+    /// steps down to CPU when the machine can no longer use it.
+    fn load(
+        storage: Option<&dyn eframe::Storage>,
+        directml_usable: bool,
+    ) -> (MlRunner, Option<u32>) {
+        let stored: Option<Self> =
+            storage.and_then(|storage| eframe::get_value(storage, ADVANCED_STORAGE_KEY));
+        match stored {
+            None => (default_ml_runner(directml_usable), None),
+            Some(Self {
+                directml: true,
+                directml_device,
+            }) if directml_usable => (MlRunner::DirectMl, directml_device),
+            Some(_) => (MlRunner::Cpu, None),
+        }
+    }
+
+    /// Snapshot the live state; the device only applies while the DirectML
+    /// runner is selected.
+    fn from_app(ml_runner: MlRunner, directml_device: Option<u32>) -> Self {
+        let directml = ml_runner.is_directml();
+        Self {
+            directml,
+            directml_device: if directml { directml_device } else { None },
+        }
+    }
+
+    /// Write to eframe's storage; the framework flushes it periodically and
+    /// on shutdown.
+    fn store(self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, ADVANCED_STORAGE_KEY, &self);
+    }
+}
 
 fn estimator_runnable(estimator: Estimator, ml_available: bool) -> bool {
     estimator != Estimator::Rmvpe || ml_available
@@ -228,7 +282,8 @@ pub struct KiraFrqGenApp {
     credits: Option<crate::credits::CreditsView>,
 
     /// The hamburger's Advanced window: the ML runner and the DirectML
-    /// device, session-only like every other setting (#13).
+    /// device. Unlike the sidebar options, these persist across restarts
+    /// (see [`AdvancedSettings`]).
     advanced_open: bool,
     ml_runner: MlRunner,
     directml_device: Option<u32>,
@@ -240,12 +295,13 @@ pub struct KiraFrqGenApp {
 }
 
 impl KiraFrqGenApp {
-    pub fn new() -> Self {
+    pub fn new(storage: Option<&dyn eframe::Storage>) -> Self {
         let max_cores = std::thread::available_parallelism()
             .map(|cores| cores.get() as u32)
             .unwrap_or(4);
         let ml_available = ml_available(&F0Config::default());
-        Self {
+        let (ml_runner, directml_device) = AdvancedSettings::load(storage, directml_usable());
+        let mut app = Self {
             estimator: kirafrqgen_core::default_estimator(ml_available),
             ml_available,
             recommended_tuning: true,
@@ -270,11 +326,17 @@ impl KiraFrqGenApp {
             credits_open: false,
             credits: None,
             advanced_open: false,
-            ml_runner: MlRunner::Cpu,
-            directml_device: None,
+            ml_runner,
+            directml_device,
             directml_devices: Ok(Vec::new()),
             run: None,
+        };
+        if app.ml_runner.is_directml() {
+            // Populate the device picker, and drop a stored adapter that is
+            // gone, before the first run can use it.
+            app.reload_directml_devices();
         }
+        app
     }
 
     fn run_state(&self) -> Option<MutexGuard<'_, RunState>> {
@@ -412,7 +474,8 @@ impl KiraFrqGenApp {
     }
 
     /// Re-enumerate the DirectML adapters for the device picker; a selection
-    /// that disappeared falls back to automatic.
+    /// that cannot be re-listed — because it disappeared, or because
+    /// enumeration itself failed — falls back to automatic.
     fn reload_directml_devices(&mut self) {
         match kirafrqgen_core::ml_devices() {
             Ok(devices) => {
@@ -423,7 +486,10 @@ impl KiraFrqGenApp {
                 }
                 self.directml_devices = Ok(devices);
             }
-            Err(reason) => self.directml_devices = Err(reason),
+            Err(reason) => {
+                self.directml_device = None;
+                self.directml_devices = Err(reason);
+            }
         }
     }
 
@@ -1062,6 +1128,10 @@ impl KiraFrqGenApp {
 }
 
 impl eframe::App for KiraFrqGenApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        AdvancedSettings::from_app(self.ml_runner, self.directml_device).store(storage);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let running = self.is_running();
 
@@ -1525,6 +1595,65 @@ mod tests {
         assert!(!estimator_runnable(Estimator::Rmvpe, false));
         assert!(estimator_runnable(Estimator::Dio, false));
         assert!(estimator_runnable(Estimator::Harvest, false));
+    }
+
+    #[test]
+    fn the_advanced_runner_defaults_to_directml_when_usable() {
+        assert_eq!(
+            AdvancedSettings::load(None, true),
+            (MlRunner::DirectMl, None)
+        );
+        assert_eq!(AdvancedSettings::load(None, false), (MlRunner::Cpu, None));
+    }
+
+    #[test]
+    fn a_stored_advanced_choice_survives_a_round_trip() {
+        let mut storage = TestStorage::default();
+        AdvancedSettings::from_app(MlRunner::DirectMl, Some(2)).store(&mut storage);
+        assert_eq!(
+            AdvancedSettings::load(Some(&storage), true),
+            (MlRunner::DirectMl, Some(2))
+        );
+
+        AdvancedSettings::from_app(MlRunner::Cpu, Some(2)).store(&mut storage);
+        assert_eq!(
+            AdvancedSettings::load(Some(&storage), true),
+            (MlRunner::Cpu, None),
+            "the processor choice wins and carries no adapter"
+        );
+    }
+
+    #[test]
+    fn a_stored_directml_choice_steps_down_when_unusable() {
+        let mut storage = TestStorage::default();
+        AdvancedSettings::from_app(MlRunner::DirectMl, Some(2)).store(&mut storage);
+        assert_eq!(
+            AdvancedSettings::load(Some(&storage), false),
+            (MlRunner::Cpu, None)
+        );
+    }
+
+    /// An in-memory [`eframe::Storage`] for the round-trip tests; eframe's own
+    /// store is a RON file under the user's app data.
+    #[derive(Default)]
+    struct TestStorage {
+        kv: HashMap<String, String>,
+    }
+
+    impl eframe::Storage for TestStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.kv.get(key).cloned()
+        }
+
+        fn set_string(&mut self, key: &str, value: String) {
+            self.kv.insert(key.to_owned(), value);
+        }
+
+        fn remove_string(&mut self, key: &str) {
+            self.kv.remove(key);
+        }
+
+        fn flush(&mut self) {}
     }
 
     #[test]
