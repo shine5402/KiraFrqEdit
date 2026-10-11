@@ -748,11 +748,12 @@ pub struct RunSummary {
     pub cancelled: bool,
 }
 
-/// The dry-run plan for a run ([`plan`]): the scan's wavs and the tables that
-/// already exist per the sidecar rules.
+/// The dry-run plan for a run ([`plan`]): the scan's wavs, the tables that
+/// already exist per the sidecar rules, and which of those are stale against
+/// the wav's mtime.
 ///
-/// The plan is existence-only: the caller applies the overwrite policy and
-/// reports would-write / would-skip per target.
+/// The plan is existence-and-staleness only: the caller applies the overwrite
+/// policy and reports would-write / would-skip per target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunPlan {
     pub files: Vec<FilePlan>,
@@ -766,6 +767,12 @@ pub struct FilePlan {
     /// Targets whose table already exists per the sidecar rules (frq canonical
     /// or alt, pmk canonical, mrq entry keys incl. the sharing flag).
     pub existing: BTreeSet<Target>,
+    /// Existing targets whose table is older than the wav, so a fill-missing
+    /// run would keep a stale table. frq and pmk compare file mtimes (frq
+    /// counts fresh when either spelling is); mrq follows moresampler's own
+    /// rule, `timestamp != 0 && wav_mtime > timestamp` in whole seconds. Always
+    /// a subset of [`existing`](Self::existing).
+    pub outdated: BTreeSet<Target>,
     /// Non-fatal notes, e.g. a corrupt `desc.mrq` that would be renamed aside.
     pub warnings: Vec<String>,
 }

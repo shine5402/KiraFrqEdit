@@ -546,6 +546,7 @@ mod tests {
         let file = FilePlan {
             wav: PathBuf::from("bank/A2.wav"),
             existing: targets(&[Target::Pmk]),
+            outdated: BTreeSet::new(),
             warnings: Vec::new(),
         };
         let selected = targets(&[Target::Frq, Target::Pmk]);
@@ -566,16 +567,19 @@ mod tests {
                 FilePlan {
                     wav: PathBuf::from("bank/A2.wav"),
                     existing: BTreeSet::new(),
+                    outdated: BTreeSet::new(),
                     warnings: Vec::new(),
                 },
                 FilePlan {
                     wav: PathBuf::from("bank/B2.wav"),
                     existing: targets(&[Target::Frq]),
+                    outdated: BTreeSet::new(),
                     warnings: Vec::new(),
                 },
                 FilePlan {
                     wav: PathBuf::from("bank/C2.wav"),
                     existing: BTreeSet::new(),
+                    outdated: BTreeSet::new(),
                     warnings: vec!["corrupt desc.mrq".to_string()],
                 },
             ],

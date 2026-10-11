@@ -93,6 +93,19 @@ impl Entry {
     pub fn raw(&self) -> &[u8] {
         &self.trunk
     }
+
+    /// The v2 generation `timestamp`, or `None` for a v1 entry (which has no
+    /// such field). The field sits at `12 + 4*nf0`, before `modified`, so a
+    /// trunk carrying trailing bytes still reads it from the right offset.
+    pub fn timestamp(&self) -> Option<i32> {
+        let nf0 = i32::from_le_bytes(self.trunk.get(0..4)?.try_into().ok()?);
+        if nf0 < 0 {
+            return None;
+        }
+        let offset = 12usize.checked_add((nf0 as usize).checked_mul(4)?)?;
+        let bytes = self.trunk.get(offset..offset.checked_add(4)?)?;
+        Some(i32::from_le_bytes(bytes.try_into().ok()?))
+    }
 }
 
 impl Desc {
@@ -205,6 +218,19 @@ impl Desc {
     /// names) never match.
     pub fn has(&self, name: &[u16]) -> bool {
         !name.is_empty() && self.entries.iter().any(|entry| entry.name == name)
+    }
+
+    /// The v2 generation `timestamp` of the entry with exactly this name, if
+    /// it exists and carries one; v1 entries, tombstones and absent names all
+    /// yield `None`.
+    pub fn timestamp(&self, name: &[u16]) -> Option<i32> {
+        if name.is_empty() {
+            return None;
+        }
+        self.entries
+            .iter()
+            .find(|entry| entry.name == name)
+            .and_then(Entry::timestamp)
     }
 
     /// Replace the entry with this name in place, or append it; returns `true`
@@ -338,6 +364,14 @@ pub fn entry_timestamp(now: SystemTime, wav_mtime: SystemTime) -> i32 {
     let now = whole_seconds(now);
     let wav_mtime = whole_seconds(wav_mtime);
     now.max(wav_mtime) as i32
+}
+
+/// Whether a stored v2 `timestamp` is stale against the wav's mtime, by
+/// moresampler's own regeneration rule (#10): `timestamp != 0 && wav_mtime >
+/// timestamp` in whole seconds. `timestamp == 0` is the hand-edit marker and
+/// is trusted forever, so it is never outdated.
+pub fn entry_outdated(timestamp: i32, wav_mtime: SystemTime) -> bool {
+    timestamp != 0 && whole_seconds(wav_mtime) > timestamp as i64
 }
 
 fn whole_seconds(time: SystemTime) -> i64 {

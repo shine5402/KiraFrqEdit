@@ -45,6 +45,7 @@ mod tests {
         FilePlan {
             wav: PathBuf::from("bank/A2.wav"),
             existing: existing.iter().copied().collect(),
+            outdated: BTreeSet::new(),
             warnings: Vec::new(),
         }
     }

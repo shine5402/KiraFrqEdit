@@ -453,6 +453,56 @@ fn entry_timestamp_is_the_later_whole_second() {
     assert_eq!(mrq::entry_timestamp(before_epoch, epoch_plus(7)), 7);
 }
 
+/// The v2 `timestamp` reads back from an entry, keyed lookups find it, and a
+/// v1 entry (whose trunk has no timestamp tail) reports none.
+#[test]
+fn entry_timestamp_reads_back_and_v1_entries_have_none() {
+    let mut desc = Desc::empty();
+    desc.upsert(Entry::from_table(&key("voice.wav"), &table_for(1024), TIMESTAMP).unwrap());
+
+    assert_eq!(desc.timestamp(&key("voice.wav")), Some(TIMESTAMP));
+    assert_eq!(desc.timestamp(&key("other.wav")), None, "absent name");
+    assert_eq!(desc.timestamp(&[]), None, "tombstone name");
+
+    // A v1 trunk is `12 + 4*nf0` with no timestamp/modified tail.
+    let nf0 = 4usize;
+    let mut trunk = Vec::new();
+    trunk.extend_from_slice(&(nf0 as i32).to_le_bytes());
+    trunk.extend_from_slice(&44100i32.to_le_bytes());
+    trunk.extend_from_slice(&256i32.to_le_bytes());
+    trunk.extend(std::iter::repeat_n(0u8, 4 * nf0));
+    let name = key("v1.wav");
+    let mut raw = Vec::new();
+    raw.extend_from_slice(&(name.len() as i32).to_le_bytes());
+    for unit in &name {
+        raw.extend_from_slice(&unit.to_le_bytes());
+    }
+    raw.extend_from_slice(&(trunk.len() as i32).to_le_bytes());
+    raw.extend_from_slice(&trunk);
+    let v1 = Desc::parse(&mrq_file(&[raw])).unwrap();
+    assert_eq!(v1.timestamp(&name), None);
+}
+
+/// moresampler's staleness rule: a nonzero timestamp older than the wav is
+/// outdated, equality is fresh, and the hand-edit marker (0) is trusted.
+#[test]
+fn entry_outdated_follows_the_moresampler_rule() {
+    let epoch_plus = |secs: u64| UNIX_EPOCH + Duration::from_secs(secs);
+    assert!(mrq::entry_outdated(1000, epoch_plus(1001)));
+    assert!(
+        !mrq::entry_outdated(1000, epoch_plus(1000)),
+        "equality is fresh"
+    );
+    assert!(
+        !mrq::entry_outdated(1000, epoch_plus(1000) + Duration::from_millis(900)),
+        "sub-second wav mtimes are ignored"
+    );
+    assert!(
+        !mrq::entry_outdated(0, epoch_plus(9_999_999)),
+        "hand-edit marker"
+    );
+}
+
 /// The per-folder path is `folder/desc.mrq`.
 #[test]
 fn desc_path_is_the_folder_file() {

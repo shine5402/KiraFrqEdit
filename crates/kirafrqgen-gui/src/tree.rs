@@ -1,7 +1,7 @@
 //! The voicebank tree the GUI shows for a planned run (#13/#23): built from
 //! `kirafrqgen_core::plan`'s per-wav sidecar answers, so the "missing frq, pmk"
-//! labels and the missing-only selection follow the production rules instead
-//! of a GUI-local guess.
+//! and "outdated" labels and the missing-or-outdated selection follow the
+//! production rules instead of a GUI-local guess.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -17,6 +17,13 @@ pub struct Targets {
 }
 
 impl Targets {
+    /// Every format checked, the GUI's default.
+    pub const ALL: Self = Self {
+        frq: true,
+        pmk: true,
+        mrq: true,
+    };
+
     /// At least one format is checked.
     pub fn any(self) -> bool {
         self.frq || self.pmk || self.mrq
@@ -42,11 +49,13 @@ impl Targets {
     }
 }
 
-/// One wav and the targets its folder already holds for it (`plan`'s answer).
+/// One wav and the targets its folder already holds for it (`plan`'s answer),
+/// plus which of those tables are older than the wav.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WavEntry {
     pub path: PathBuf,
     pub existing: BTreeSet<Target>,
+    pub outdated: BTreeSet<Target>,
 }
 
 /// One folder of the tree; `files` are its direct wavs, `dirs` its subfolders.
@@ -100,6 +109,7 @@ impl Tree {
             let entry = WavEntry {
                 path: file.wav.clone(),
                 existing: file.existing.clone(),
+                outdated: file.outdated.clone(),
             };
             let relative = file.wav.strip_prefix(root).unwrap_or(Path::new(""));
             let components: Vec<&std::ffi::OsStr> = relative
@@ -143,12 +153,13 @@ impl Tree {
         self.root_files.len() + self.dirs.iter().map(|dir| dir.total).sum::<usize>()
     }
 
-    /// The wavs missing at least one checked format, for "Select missing".
-    pub fn select_missing(&self, targets: Targets) -> BTreeSet<PathBuf> {
+    /// The wavs missing or holding a stale copy of at least one checked
+    /// format, for "Select missing and outdated".
+    pub fn select_missing_or_outdated(&self, targets: Targets) -> BTreeSet<PathBuf> {
         self.root_files
             .iter()
             .chain(self.dirs.iter().flat_map(|dir| dir.entries()))
-            .filter(|entry| missing_any(entry, targets))
+            .filter(|entry| missing_or_outdated(entry, targets))
             .map(|entry| entry.path.clone())
             .collect()
     }
@@ -237,23 +248,34 @@ pub fn target_name(target: Target) -> &'static str {
     }
 }
 
-/// Whether `entry` lacks any checked format.
-pub fn missing_any(entry: &WavEntry, targets: Targets) -> bool {
+/// Whether `entry` lacks, or holds a stale copy of, any checked format.
+pub fn missing_or_outdated(entry: &WavEntry, targets: Targets) -> bool {
     targets
         .checked()
-        .any(|target| !entry.existing.contains(&target))
+        .any(|target| !entry.existing.contains(&target) || entry.outdated.contains(&target))
 }
 
-/// The dim per-file label: the formats the entry lacks; `complete` when it has
-/// them all, `—` when nothing is checked.
-pub fn missing_label(entry: &WavEntry, targets: Targets) -> String {
-    let missing: Vec<&str> = targets
-        .checked()
-        .filter(|target| !entry.existing.contains(target))
-        .map(target_name)
-        .collect();
+/// The dim per-file label: the checked formats the entry lacks or holds a stale
+/// copy of; `complete` when all are fresh, `—` when nothing is checked.
+pub fn status_label(entry: &WavEntry, targets: Targets) -> String {
+    let mut missing = Vec::new();
+    let mut outdated = Vec::new();
+    for target in targets.checked() {
+        if !entry.existing.contains(&target) {
+            missing.push(target_name(target));
+        } else if entry.outdated.contains(&target) {
+            outdated.push(target_name(target));
+        }
+    }
+    let mut parts = Vec::new();
     if !missing.is_empty() {
-        format!("missing {}", missing.join(", "))
+        parts.push(format!("missing {}", missing.join(", ")));
+    }
+    if !outdated.is_empty() {
+        parts.push(format!("outdated {}", outdated.join(", ")));
+    }
+    if !parts.is_empty() {
+        parts.join("; ")
     } else if targets.any() {
         "complete".to_owned()
     } else {
@@ -270,6 +292,7 @@ mod tests {
             .map(|name| FilePlan {
                 wav: Path::new(root).join(name),
                 existing: existing.iter().copied().collect(),
+                outdated: BTreeSet::new(),
                 warnings: Vec::new(),
             })
             .collect()
@@ -280,9 +303,15 @@ mod tests {
     }
 
     fn file(path: &str, existing: &[Target]) -> WavEntry {
+        stale_file(path, existing, &[])
+    }
+
+    /// A wav entry with the given existing and outdated targets.
+    fn stale_file(path: &str, existing: &[Target], outdated: &[Target]) -> WavEntry {
         WavEntry {
             path: PathBuf::from(path),
             existing: existing.iter().copied().collect(),
+            outdated: outdated.iter().copied().collect(),
         }
     }
 
@@ -352,61 +381,87 @@ mod tests {
     }
 
     #[test]
-    fn missing_uses_only_the_checked_formats() {
+    fn status_label_uses_only_the_checked_formats() {
         let entry = file("/bank/A2.wav", &[Target::Frq]);
 
         assert_eq!(
-            missing_label(&entry, targets(true, true, false)),
+            status_label(&entry, targets(true, true, false)),
             "missing pmk"
         );
         assert_eq!(
-            missing_label(&entry, targets(true, false, false)),
+            status_label(&entry, targets(true, false, false)),
             "complete"
         );
         assert_eq!(
-            missing_label(&entry, targets(true, true, true)),
+            status_label(&entry, targets(true, true, true)),
             "missing pmk, mrq"
         );
-        assert_eq!(missing_label(&entry, targets(false, false, false)), "—");
-        assert!(missing_any(&entry, targets(false, true, false)));
-        assert!(!missing_any(&entry, targets(true, false, false)));
+        assert_eq!(status_label(&entry, targets(false, false, false)), "—");
+        assert!(missing_or_outdated(&entry, targets(false, true, false)));
+        assert!(!missing_or_outdated(&entry, targets(true, false, false)));
     }
 
     #[test]
-    fn select_missing_picks_files_lacking_a_checked_format() {
+    fn status_label_reports_outdated_tables() {
+        let entry = stale_file("/bank/A2.wav", &[Target::Frq, Target::Pmk], &[Target::Frq]);
+
+        assert_eq!(
+            status_label(&entry, targets(true, true, true)),
+            "missing mrq; outdated frq"
+        );
+        assert_eq!(
+            status_label(&entry, targets(true, true, false)),
+            "outdated frq"
+        );
+        assert_eq!(status_label(&entry, targets(false, false, false)), "—");
+        assert!(missing_or_outdated(&entry, targets(true, false, false)));
+        assert!(
+            !missing_or_outdated(&entry, targets(false, true, false)),
+            "pmk is fresh"
+        );
+    }
+
+    #[test]
+    fn select_missing_or_outdated_picks_missing_and_stale_tables() {
         let files = vec![
             FilePlan {
                 wav: "/bank/A2.wav".into(),
                 existing: [Target::Frq, Target::Pmk].into(),
+                outdated: [Target::Pmk].into(),
                 warnings: Vec::new(),
             },
             FilePlan {
                 wav: "/bank/A3.wav".into(),
                 existing: [Target::Frq].into(),
+                outdated: BTreeSet::new(),
                 warnings: Vec::new(),
             },
             FilePlan {
                 wav: "/bank/B/A4.wav".into(),
                 existing: [].into(),
+                outdated: BTreeSet::new(),
                 warnings: Vec::new(),
             },
         ];
         let tree = Tree::from_plan(Path::new("/bank"), &files);
 
         assert_eq!(
-            tree.select_missing(targets(true, true, false)),
+            tree.select_missing_or_outdated(targets(true, true, false)),
             BTreeSet::from([
+                PathBuf::from("/bank/A2.wav"),
                 PathBuf::from("/bank/A3.wav"),
-                PathBuf::from("/bank/B/A4.wav")
-            ])
+                PathBuf::from("/bank/B/A4.wav"),
+            ]),
+            "A2's pmk is stale, A3 lacks pmk, A4 lacks both"
         );
         assert_eq!(
-            tree.select_missing(targets(true, false, false)),
+            tree.select_missing_or_outdated(targets(true, false, false)),
             BTreeSet::from([PathBuf::from("/bank/B/A4.wav")]),
-            "A2 and A3 already have frq"
+            "A2 and A3 already have a fresh frq; A2's stale pmk is not checked"
         );
         assert!(
-            tree.select_missing(targets(false, false, false)).is_empty(),
+            tree.select_missing_or_outdated(targets(false, false, false))
+                .is_empty(),
             "nothing checked selects nothing"
         );
     }
@@ -433,6 +488,7 @@ mod tests {
         let files = vec![FilePlan {
             wav: "/bank/A/A2.wav".into(),
             existing: BTreeSet::new(),
+            outdated: BTreeSet::new(),
             warnings: vec!["desc.mrq is corrupt".into()],
         }];
         let tree = Tree::from_plan(Path::new("/bank"), &files);

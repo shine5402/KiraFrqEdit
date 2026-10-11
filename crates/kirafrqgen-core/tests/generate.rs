@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hound::{SampleFormat, WavSpec, WavWriter};
 use kirafrq_formats::{FrequencyTable, frq, mrq};
@@ -81,6 +82,18 @@ fn write_wav(scratch: &Scratch, name: &str, spec: WavSpec, samples: &[i16]) -> P
     }
     writer.finalize().unwrap();
     path
+}
+
+/// Push a file's mtime `ago` into the past, so a table can be made older than
+/// its wav without sleeping.
+fn backdate(path: &Path, ago: Duration) {
+    let when = SystemTime::now() - ago;
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
 }
 
 /// A canonical generation table for fixture files written straight to disk.
@@ -925,6 +938,63 @@ fn plan_reports_existing_tables_without_decoding_or_writing() {
     assert_eq!(by_name("A4.wav").existing, BTreeSet::new());
     assert!(!mrq::desc_path(&scratch.0).exists(), "plan writes nothing");
     assert!(plan.files.iter().all(|file| file.warnings.is_empty()));
+}
+
+/// A table older than its wav is `outdated`; a table written after the wav is
+/// fresh, and the mrq entry follows moresampler's timestamp rule.
+#[test]
+fn plan_marks_tables_older_than_the_wav_as_outdated() {
+    let scratch = Scratch::new("plan-outdated");
+    write_wav(&scratch, "A2.wav", mono(), &[SAMPLE; 1000]);
+    write_wav(&scratch, "A3.wav", mono(), &[SAMPLE; 1000]);
+    write_wav(&scratch, "A4.wav", mono(), &[SAMPLE; 1000]);
+
+    // A2: tables written now, then backdated an hour -> older than the wav.
+    fs::write(scratch.join("A2_wav.frq"), b"x").unwrap();
+    fs::write(scratch.join("A2_wav.pmk"), b"x").unwrap();
+    backdate(&scratch.join("A2_wav.frq"), Duration::from_secs(3600));
+    backdate(&scratch.join("A2_wav.pmk"), Duration::from_secs(3600));
+
+    // A3: frq written after its wav -> fresh.
+    fs::write(scratch.join("A3_wav.frq"), b"x").unwrap();
+
+    // A4: an mrq entry whose timestamp predates the wav -> stale.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i32;
+    let mut desc = mrq::Desc::empty();
+    desc.upsert(mrq::Entry::from_table(&key("A4.wav"), &fixture_table(5), now - 3600).unwrap());
+    desc.write(&mrq::desc_path(&scratch.0)).unwrap();
+
+    let plan = plan(&options(
+        &scratch.0,
+        &[Target::Frq, Target::Pmk, Target::Mrq],
+    ))
+    .unwrap();
+    let by_name = |name: &str| {
+        plan.files
+            .iter()
+            .find(|file| file.wav.ends_with(name))
+            .unwrap()
+    };
+
+    assert_eq!(
+        by_name("A2.wav").outdated,
+        [Target::Frq, Target::Pmk].into()
+    );
+    assert!(
+        by_name("A2.wav")
+            .existing
+            .is_superset(&by_name("A2.wav").outdated),
+        "outdated is a subset of existing"
+    );
+    assert_eq!(
+        by_name("A3.wav").outdated,
+        BTreeSet::new(),
+        "frq written after its wav"
+    );
+    assert_eq!(by_name("A4.wav").outdated, [Target::Mrq].into());
 }
 
 #[test]
