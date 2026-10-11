@@ -23,7 +23,7 @@ use kirafrqgen_core::{
 
 use crate::run::{Row, RunState, Status};
 use crate::text_ops::{self, CharRange};
-use crate::tree::{DirNode, Targets, Tree, WavEntry, missing_label, target_name};
+use crate::tree::{DirNode, Targets, Tree, WavEntry, status_label, target_name};
 
 /// The README's `ML model` section, the model-missing hint's target (#72).
 const MODEL_HELP_URL: &str =
@@ -305,11 +305,7 @@ impl KiraFrqGenApp {
             estimator: kirafrqgen_core::default_estimator(ml_available),
             ml_available,
             recommended_tuning: true,
-            targets: Targets {
-                frq: true,
-                pmk: false,
-                mrq: false,
-            },
+            targets: Targets::ALL,
             // Deleting the cache is what makes moresampler notice a changed
             // `desc.mrq` (#4), so the correct behavior is the default.
             delete_llsm: true,
@@ -375,8 +371,8 @@ impl KiraFrqGenApp {
 
     /// Run options: the checked formats only. `overwrite` is on because the
     /// GUI has no overwrite control — the *selection* is the overwrite choice
-    /// (#13), with "Select missing" as the safe default, so every selected
-    /// wav is (re)generated.
+    /// (#13), with "Select missing and outdated" as the safe default, so every
+    /// selected wav is (re)generated.
     fn run_options(&self, root: PathBuf) -> GenerateOptions {
         GenerateOptions {
             root,
@@ -421,7 +417,7 @@ impl KiraFrqGenApp {
     }
 
     /// Re-plan the folder: the scan plus the sidecar rules decide the labels
-    /// and the missing-only default selection.
+    /// and the missing-or-outdated default selection.
     fn rescan(&mut self) {
         self.run = None;
         self.tree = None;
@@ -438,7 +434,7 @@ impl KiraFrqGenApp {
                 for dir in &tree.dirs {
                     collect_dir_paths(dir, &mut self.expanded);
                 }
-                self.selected = tree.select_missing(self.targets);
+                self.selected = tree.select_missing_or_outdated(self.targets);
                 self.tree = Some(tree);
             }
             Err(error) => self.plan_error = Some(error.to_string()),
@@ -929,10 +925,10 @@ impl KiraFrqGenApp {
         ui.add_enabled_ui(!running, |ui| {
             ui.horizontal(|ui| {
                 if ui
-                    .button(format!("{} Select missing", icons::MAGIC_WAND))
+                    .button(format!("{} Select missing and outdated", icons::MAGIC_WAND))
                     .clicked()
                 {
-                    *selected = tree.select_missing(targets);
+                    *selected = tree.select_missing_or_outdated(targets);
                 }
                 if ui
                     .button(format!("{} Select all", icons::SELECTION_ALL))
@@ -1280,7 +1276,7 @@ fn tree_file(ui: &mut egui::Ui, entry: &WavEntry, ctx: &mut TreeCtx, depth: usiz
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         ui.label(format!("{} {name}", icons::FILE_AUDIO));
-        ui.weak(missing_label(entry, ctx.targets));
+        ui.weak(status_label(entry, ctx.targets));
     });
 }
 

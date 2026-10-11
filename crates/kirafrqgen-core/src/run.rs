@@ -718,6 +718,84 @@ fn existing_targets(wav: &Path, opts: &GenerateOptions, descs: &FolderDescs) -> 
     existing
 }
 
+/// The selected targets whose existing table is older than the wav, so a
+/// fill-missing run would keep a stale table. frq and pmk compare the wav's
+/// mtime with the table file's; mrq follows moresampler's own staleness rule
+/// (#10) on the entry's `timestamp`. Missing targets are never outdated, so
+/// this is always a subset of [`existing_targets`].
+fn outdated_targets(wav: &Path, opts: &GenerateOptions, descs: &FolderDescs) -> BTreeSet<Target> {
+    let wav_mtime = wav_mtime(wav);
+    let mut outdated = BTreeSet::new();
+    for target in &opts.targets {
+        let stale = match target {
+            Target::Frq => frq_outdated(wav, wav_mtime),
+            Target::Pmk => table_outdated(&paths::canonical_table_path(wav, "pmk"), wav_mtime),
+            Target::Mrq => mrq_outdated(wav, opts, descs, wav_mtime),
+        };
+        if stale {
+            outdated.insert(*target);
+        }
+    }
+    outdated
+}
+
+/// Whether `table` exists and is older than the wav. A missing file is not
+/// outdated — it is missing.
+fn table_outdated(table: &Path, wav_mtime: SystemTime) -> bool {
+    fs::metadata(table)
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|table_mtime| wav_mtime > table_mtime)
+}
+
+/// frq has two spellings; the target is outdated only when every spelling that
+/// exists is older than the wav, so a fresh copy covers the target.
+fn frq_outdated(wav: &Path, wav_mtime: SystemTime) -> bool {
+    let spellings = [
+        paths::canonical_table_path(wav, "frq"),
+        paths::alternate_frq_path(wav),
+    ];
+    let mut exists = false;
+    let mut fresh = false;
+    for path in spellings {
+        let Ok(metadata) = fs::metadata(&path) else {
+            continue;
+        };
+        exists = true;
+        if metadata
+            .modified()
+            .is_ok_and(|table_mtime| table_mtime >= wav_mtime)
+        {
+            fresh = true;
+        }
+    }
+    exists && !fresh
+}
+
+/// moresampler's staleness rule for the folder's entry (#10): outdated when
+/// every entry key exists and any carries a nonzero `timestamp` older than the
+/// wav's whole-second mtime. A v1 entry (no timestamp) is trusted.
+fn mrq_outdated(
+    wav: &Path,
+    opts: &GenerateOptions,
+    descs: &FolderDescs,
+    wav_mtime: SystemTime,
+) -> bool {
+    let Some(desc) = descs.loaded.get(&folder_of(wav)) else {
+        return false;
+    };
+    let keys = mrq::entry_keys(
+        wav.file_name().expect("the scan yields named files"),
+        opts.sharing.as_ref(),
+    );
+    if !keys.iter().all(|key| desc.has(key)) {
+        return false;
+    }
+    keys.iter().any(|key| {
+        desc.timestamp(key)
+            .is_some_and(|timestamp| mrq::entry_outdated(timestamp, wav_mtime))
+    })
+}
+
 /// Plan one wav. The corrupt-folder note is per folder (#10), so only the
 /// first wav of a corrupt folder carries it.
 fn plan_wav(
@@ -737,6 +815,7 @@ fn plan_wav(
     FilePlan {
         wav: wav.to_path_buf(),
         existing: existing_targets(wav, opts, descs),
+        outdated: outdated_targets(wav, opts, descs),
         warnings,
     }
 }
