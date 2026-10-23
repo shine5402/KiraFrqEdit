@@ -1,7 +1,10 @@
 //! The process-wide ONNX Runtime session shared by every model path
 //! (#48/#69): one session, built lazily behind a mutex and rebuilt only when
 //! the model source, the thread count or the runner/device settings change.
-//! Only [`build_session`] builds; the Core ML probe uses it directly.
+//! An estimator can instead own its session ([`Owned`]; the ML server keeps
+//! RMVPE and SwiftF0 loaded side by side). Either way, estimates run on a
+//! session one at a time. Only [`build_session`] builds; the Core ML probe
+//! uses it directly.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -49,6 +52,31 @@ fn build(source: &ModelSource, jobs: usize, config: SessionConfig) -> Result<Cac
         config,
         session: build_session(source, jobs, config)?,
     })
+}
+
+/// A session one estimator owns, built up front.
+pub(crate) struct Owned(Mutex<Session>);
+
+impl Owned {
+    pub(crate) fn build(
+        source: &ModelSource,
+        jobs: usize,
+        config: SessionConfig,
+    ) -> Result<Self, Error> {
+        Ok(Self(Mutex::new(build_session(source, jobs, config)?)))
+    }
+
+    /// Run `f` on the session, waiting while another estimate uses it.
+    pub(crate) fn run<R>(
+        &self,
+        f: impl FnOnce(&mut Session) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        let mut session = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        f(&mut session)
+    }
 }
 
 /// Build a session: static ONNX Runtime, `Level3` graph optimization,

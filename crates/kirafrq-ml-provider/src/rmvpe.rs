@@ -9,6 +9,9 @@
 //! - output: salience `[1, T, 360]`; f0 is the salience-weighted mean over
 //!   `+/-4` bins around the argmax, confidence is the peak salience.
 
+use std::sync::Arc;
+
+use ort::session::Session;
 use ort::value::Tensor;
 
 use crate::grid::{NativeContour, RMVPE_CONTRACT, Track, map_to_table_grid};
@@ -30,9 +33,10 @@ const DECODER_HALF_WINDOW: usize = 4;
 /// Progress ticks per estimate: resample, inference, decode, map.
 const PROGRESS_TICKS: usize = 4;
 
-/// The RMVPE estimator. The ONNX Runtime session is a process-wide,
-/// lazily-built singleton behind a mutex, so every run in one process reuses
-/// the loaded model.
+/// The RMVPE estimator. By default it runs on the process-wide
+/// session, built lazily, so every run in one process reuses the loaded
+/// model; [`Rmvpe::with_own_session`] gives it its own.
+#[derive(Clone)]
 pub struct Rmvpe {
     source: ModelSource,
     policy: UvPolicy,
@@ -41,6 +45,9 @@ pub struct Rmvpe {
     jobs: usize,
     /// The execution provider and device; CPU by default.
     session_config: SessionConfig,
+    /// An own session ([`Self::with_own_session`]); `None` uses the
+    /// process-wide one.
+    session: Option<Arc<session::Owned>>,
 }
 
 impl Rmvpe {
@@ -52,6 +59,7 @@ impl Rmvpe {
             policy,
             jobs,
             session_config: SessionConfig::default(),
+            session: None,
         }
     }
 
@@ -67,7 +75,37 @@ impl Rmvpe {
     /// cannot be loaded then fails at configuration time (#49) instead of on
     /// the first file.
     pub fn ensure_session(&self) -> Result<(), Error> {
-        session::with(&self.source, self.jobs, self.session_config, |_| Ok(()))
+        self.run(|_| Ok(()))
+    }
+
+    /// Give this estimator its own session, built now, instead of the
+    /// process-wide one: the ML server keeps both ML estimators loaded. Clones
+    /// share it. Call it after [`Self::with_session_config`]: the session is
+    /// built for the settings at hand.
+    pub fn with_own_session(mut self) -> Result<Self, Error> {
+        self.session = Some(Arc::new(session::Owned::build(
+            &self.source,
+            self.jobs,
+            self.session_config,
+        )?));
+        Ok(self)
+    }
+
+    /// The same estimator, session included, with another #53 policy: the ML
+    /// server takes the range and threshold from each request.
+    #[must_use]
+    pub fn with_policy(mut self, policy: UvPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Run `f` on this estimator's session: its own, else the process-wide
+    /// one.
+    fn run<R>(&self, f: impl FnOnce(&mut Session) -> Result<R, Error>) -> Result<R, Error> {
+        match &self.session {
+            Some(session) => session.run(f),
+            None => session::with(&self.source, self.jobs, self.session_config, f),
+        }
     }
 
     /// Estimate f0 for mono 44.1 kHz `samples` and map it onto the table grid
@@ -131,32 +169,44 @@ impl Rmvpe {
         self.infer(audio_16k)
     }
 
-    /// Run the process session over a padded `[1, 128, T_pad]` log-mel input
-    /// and return the first `frames` rows of the `[1, T_pad, 360]` salience.
-    fn run_session(&self, mel: &[f32], frames: usize) -> Result<Vec<f32>, Error> {
-        session::with(&self.source, self.jobs, self.session_config, |session| {
-            let padded = mel.len() / crate::mel::N_MELS;
-            let input = Tensor::from_array((
-                [1_i64, crate::mel::N_MELS as i64, padded as i64],
-                mel.to_vec().into_boxed_slice(),
-            ))
-            .map_err(session::ort_error)?;
-            let outputs = session
-                .run(ort::inputs![input])
-                .map_err(|error| Error::Ort(format!("RMVPE inference failed: {error}")))?;
-            let (shape, salience) = outputs[0].try_extract_tensor::<f32>().map_err(|error| {
-                Error::Ort(format!("RMVPE output is not an f32 tensor: {error}"))
-            })?;
-
-            let shape: Vec<usize> = shape.iter().map(|&dim| dim as usize).collect();
-            if shape.len() != 3 || shape[0] != 1 || shape[2] != N_BINS || shape[1] < frames {
-                return Err(Error::Ort(format!(
-                    "RMVPE output shape {shape:?} is not [1, >= {frames}, {N_BINS}]"
-                )));
-            }
-            Ok(salience[..frames * N_BINS].to_vec())
-        })
+    /// Run one inference now, so the first real estimate pays no warmup (the
+    /// ML server's startup).
+    pub fn warm(&self) -> Result<(), Error> {
+        let mut frontend = Frontend::new();
+        let (mel, frames) = frontend.mel(&[0.0; 16_000]);
+        let padded = frontend.pad_to_multiple(&mel, frames);
+        self.run(|session| run_on(session, &padded, frames).map(|_| ()))
     }
+
+    /// Run the session over a padded `[1, 128, T_pad]` log-mel input and
+    /// return the first `frames` rows of the `[1, T_pad, 360]` salience.
+    fn run_session(&self, mel: &[f32], frames: usize) -> Result<Vec<f32>, Error> {
+        self.run(|session| run_on(session, mel, frames))
+    }
+}
+
+/// [`Rmvpe::run_session`] on one session.
+fn run_on(session: &mut Session, mel: &[f32], frames: usize) -> Result<Vec<f32>, Error> {
+    let padded = mel.len() / crate::mel::N_MELS;
+    let input = Tensor::from_array((
+        [1_i64, crate::mel::N_MELS as i64, padded as i64],
+        mel.to_vec().into_boxed_slice(),
+    ))
+    .map_err(session::ort_error)?;
+    let outputs = session
+        .run(ort::inputs![input])
+        .map_err(|error| Error::Ort(format!("RMVPE inference failed: {error}")))?;
+    let (shape, salience) = outputs[0]
+        .try_extract_tensor::<f32>()
+        .map_err(|error| Error::Ort(format!("RMVPE output is not an f32 tensor: {error}")))?;
+
+    let shape: Vec<usize> = shape.iter().map(|&dim| dim as usize).collect();
+    if shape.len() != 3 || shape[0] != 1 || shape[2] != N_BINS || shape[1] < frames {
+        return Err(Error::Ort(format!(
+            "RMVPE output shape {shape:?} is not [1, >= {frames}, {N_BINS}]"
+        )));
+    }
+    Ok(salience[..frames * N_BINS].to_vec())
 }
 
 /// Decode the salience of the first `frames` native frames into f0 with the

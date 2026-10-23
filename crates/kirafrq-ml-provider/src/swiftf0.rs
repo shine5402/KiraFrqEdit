@@ -14,6 +14,9 @@
 //! The `native_*` methods expose the model's own grid for local verification
 //! against the Python `swift_f0` reference; they are not a pipeline surface.
 
+use std::sync::Arc;
+
+use ort::session::Session;
 use ort::value::Tensor;
 
 use crate::grid::{NativeContour, SWIFTF0_CONTRACT, TABLE_HOP_SAMPLES, Track, map_to_table_grid};
@@ -64,8 +67,10 @@ pub fn resolve_source() -> ModelSource {
     }
 }
 
-/// The SwiftF0 estimator. The ONNX Runtime session is the process-wide,
-/// lazily-built singleton behind a mutex (see [`crate::session`]).
+/// The SwiftF0 estimator. By default it runs on the process-wide
+/// session, built lazily (see [`crate::session`]);
+/// [`SwiftF0::with_own_session`] gives it its own.
+#[derive(Clone)]
 pub struct SwiftF0 {
     source: ModelSource,
     policy: UvPolicy,
@@ -74,6 +79,9 @@ pub struct SwiftF0 {
     jobs: usize,
     /// The execution provider and device; CPU by default.
     session_config: SessionConfig,
+    /// An own session ([`Self::with_own_session`]); `None` uses the
+    /// process-wide one.
+    session: Option<Arc<session::Owned>>,
 }
 
 impl SwiftF0 {
@@ -85,6 +93,7 @@ impl SwiftF0 {
             policy,
             jobs,
             session_config: SessionConfig::default(),
+            session: None,
         }
     }
 
@@ -99,7 +108,37 @@ impl SwiftF0 {
     /// Build the process session now if it is not built yet, so an unloadable
     /// model fails at configuration time (#49) instead of on the first file.
     pub fn ensure_session(&self) -> Result<(), Error> {
-        session::with(&self.source, self.jobs, self.session_config, |_| Ok(()))
+        self.run(|_| Ok(()))
+    }
+
+    /// Give this estimator its own session, built now, instead of the
+    /// process-wide one: the ML server keeps both ML estimators loaded. Clones
+    /// share it. Call it after [`Self::with_session_config`]: the session is
+    /// built for the settings at hand.
+    pub fn with_own_session(mut self) -> Result<Self, Error> {
+        self.session = Some(Arc::new(session::Owned::build(
+            &self.source,
+            self.jobs,
+            self.session_config,
+        )?));
+        Ok(self)
+    }
+
+    /// The same estimator, session included, with another #53 policy: the ML
+    /// server takes the range and threshold from each request.
+    #[must_use]
+    pub fn with_policy(mut self, policy: UvPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Run `f` on this estimator's session: its own, else the process-wide
+    /// one.
+    fn run<R>(&self, f: impl FnOnce(&mut Session) -> Result<R, Error>) -> Result<R, Error> {
+        match &self.session {
+            Some(session) => session.run(f),
+            None => session::with(&self.source, self.jobs, self.session_config, f),
+        }
     }
 
     /// Estimate f0 for mono 44.1 kHz `samples` and map it onto the table grid
@@ -161,45 +200,14 @@ impl SwiftF0 {
             audio.resize(MIN_AUDIO_LENGTH, 0.0);
         }
 
-        session::with(&self.source, self.jobs, self.session_config, |session| {
-            let length = audio.len();
-            let input =
-                Tensor::from_array(([1_i64, length as i64], audio.clone().into_boxed_slice()))
-                    .map_err(session::ort_error)?;
-            let outputs = session
-                .run(ort::inputs![input])
-                .map_err(|error| Error::Ort(format!("SwiftF0 inference failed: {error}")))?;
+        self.run(|session| outputs_on(session, &audio))
+    }
 
-            let (pitch_shape, pitch) = outputs
-                .get(PITCH_OUTPUT)
-                .ok_or_else(|| Error::Ort(format!("SwiftF0 has no `{PITCH_OUTPUT}` output")))?
-                .try_extract_tensor::<f32>()
-                .map_err(|error| {
-                    Error::Ort(format!(
-                        "SwiftF0 `{PITCH_OUTPUT}` is not an f32 tensor: {error}"
-                    ))
-                })?;
-            let (confidence_shape, confidence) = outputs
-                .get(CONFIDENCE_OUTPUT)
-                .ok_or_else(|| Error::Ort(format!("SwiftF0 has no `{CONFIDENCE_OUTPUT}` output")))?
-                .try_extract_tensor::<f32>()
-                .map_err(|error| {
-                    Error::Ort(format!(
-                        "SwiftF0 `{CONFIDENCE_OUTPUT}` is not an f32 tensor: {error}"
-                    ))
-                })?;
-
-            let frames = validate_output_shape(PITCH_OUTPUT, pitch_shape)?;
-            validate_output_shape(CONFIDENCE_OUTPUT, confidence_shape)?;
-            if pitch.len() != confidence.len() || confidence.len() != frames {
-                return Err(Error::Ort(format!(
-                    "SwiftF0 pitch/confidence length mismatch: {} vs {}",
-                    pitch.len(),
-                    confidence.len()
-                )));
-            }
-            Ok((pitch.to_vec(), confidence.to_vec()))
-        })
+    /// Run one inference now, so the first real estimate pays no warmup (the
+    /// ML server's startup).
+    pub fn warm(&self) -> Result<(), Error> {
+        let audio = vec![0.0; 16_000];
+        self.run(|session| outputs_on(session, &audio).map(|_| ()))
     }
 
     /// One full inference: the raw outputs with the #53 policy applied on the
@@ -212,6 +220,46 @@ impl SwiftF0 {
             .map(|(&f0, &confidence)| self.policy.apply(f64::from(f0), f64::from(confidence)))
             .collect())
     }
+}
+
+/// [`SwiftF0::native_outputs`] on one session, over already-padded audio.
+fn outputs_on(session: &mut Session, audio: &[f32]) -> Result<(Vec<f32>, Vec<f32>), Error> {
+    let length = audio.len();
+    let input = Tensor::from_array(([1_i64, length as i64], audio.to_vec().into_boxed_slice()))
+        .map_err(session::ort_error)?;
+    let outputs = session
+        .run(ort::inputs![input])
+        .map_err(|error| Error::Ort(format!("SwiftF0 inference failed: {error}")))?;
+
+    let (pitch_shape, pitch) = outputs
+        .get(PITCH_OUTPUT)
+        .ok_or_else(|| Error::Ort(format!("SwiftF0 has no `{PITCH_OUTPUT}` output")))?
+        .try_extract_tensor::<f32>()
+        .map_err(|error| {
+            Error::Ort(format!(
+                "SwiftF0 `{PITCH_OUTPUT}` is not an f32 tensor: {error}"
+            ))
+        })?;
+    let (confidence_shape, confidence) = outputs
+        .get(CONFIDENCE_OUTPUT)
+        .ok_or_else(|| Error::Ort(format!("SwiftF0 has no `{CONFIDENCE_OUTPUT}` output")))?
+        .try_extract_tensor::<f32>()
+        .map_err(|error| {
+            Error::Ort(format!(
+                "SwiftF0 `{CONFIDENCE_OUTPUT}` is not an f32 tensor: {error}"
+            ))
+        })?;
+
+    let frames = validate_output_shape(PITCH_OUTPUT, pitch_shape)?;
+    validate_output_shape(CONFIDENCE_OUTPUT, confidence_shape)?;
+    if pitch.len() != confidence.len() || confidence.len() != frames {
+        return Err(Error::Ort(format!(
+            "SwiftF0 pitch/confidence length mismatch: {} vs {}",
+            pitch.len(),
+            confidence.len()
+        )));
+    }
+    Ok((pitch.to_vec(), confidence.to_vec()))
 }
 
 #[cfg(test)]
