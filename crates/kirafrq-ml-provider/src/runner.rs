@@ -1,11 +1,13 @@
 //! The ML runner: which ONNX Runtime execution provider runs RMVPE and
-//! SwiftF0, and the DirectML adapter list for the device picker.
+//! SwiftF0, the DirectML adapter list for the device picker, and whether
+//! Core ML can run here.
 //!
 //! The neutral half — [`Runner`], [`SessionConfig`], [`DirectMlDevice`] — is
 //! always compiled so the front ends can carry the choice in every build. The
 //! DirectML parts are live only in Windows `ort` builds: `ort-sys` ships a
 //! DirectML-enabled ONNX Runtime for Windows (and only Windows), and the
-//! Cargo.toml target entry enables `ort/directml` there.
+//! Cargo.toml target entry enables `ort/directml` there; Core ML follows the
+//! same pattern for Apple-silicon macOS.
 //!
 //! DirectML's `device_id` is the adapter index in `IDXGIFactory::EnumAdapters`
 //! order (directml's own docs); 0 is the default adapter, which on dual-GPU
@@ -26,6 +28,10 @@ pub enum Runner {
     /// does not take — and a dispatch that cannot register at all — run on
     /// the CPU instead of failing the run.
     DirectMl,
+    /// Core ML on an Apple-silicon Mac's GPU (#84). Nodes Core ML does not
+    /// take run on ONNX Runtime's CPU execution provider; a Core ML that
+    /// cannot register at all fails the session.
+    CoreMl,
 }
 
 /// The ML sessions' runtime settings: the runner and its device.
@@ -40,6 +46,27 @@ pub struct SessionConfig {
 
 /// Whether runs can use the DirectML runner at all in this build.
 pub const DIRECTML_SUPPORTED: bool = cfg!(all(windows, feature = "ort"));
+
+/// Whether runs can use the Core ML runner at all in this build.
+pub const COREML_SUPPORTED: bool = cfg!(all(
+    target_os = "macos",
+    target_arch = "aarch64",
+    feature = "ort"
+));
+
+/// Whether a Core ML session commits on this machine: a supported build and a
+/// probe session over the bundled SwiftF0 that builds. Probed once per
+/// process.
+pub fn coreml_usable() -> bool {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "ort"))]
+    {
+        crate::coreml::usable()
+    }
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64", feature = "ort")))]
+    {
+        false
+    }
+}
 
 /// One DirectX 12 adapter, in the order DirectML's `device_id` follows.
 #[derive(Debug, Clone, PartialEq, Eq)]

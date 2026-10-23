@@ -1,6 +1,7 @@
 //! The process-wide ONNX Runtime session shared by every model path
 //! (#48/#69): one session, built lazily behind a mutex and rebuilt only when
 //! the model source, the thread count or the runner/device settings change.
+//! Only [`build_session`] builds; the Core ML probe uses it directly.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -41,11 +42,24 @@ pub(crate) fn with<R>(
     f(&mut cached.session)
 }
 
-/// Build the session: static ONNX Runtime, `Level3` graph optimization,
+fn build(source: &ModelSource, jobs: usize, config: SessionConfig) -> Result<Cached, Error> {
+    Ok(Cached {
+        source: source.clone(),
+        jobs,
+        config,
+        session: build_session(source, jobs, config)?,
+    })
+}
+
+/// Build a session: static ONNX Runtime, `Level3` graph optimization,
 /// `inter_op = 1`, `jobs` into the intra-op pool, the configured execution
 /// provider. An on-disk model is committed from its path; a bundled model
 /// from its bytes in memory.
-fn build(source: &ModelSource, jobs: usize, config: SessionConfig) -> Result<Cached, Error> {
+pub(crate) fn build_session(
+    source: &ModelSource,
+    jobs: usize,
+    config: SessionConfig,
+) -> Result<Session, Error> {
     let mut builder = Session::builder().map_err(ort_error)?;
     builder = builder
         .with_optimization_level(GraphOptimizationLevel::Level3)
@@ -56,7 +70,7 @@ fn build(source: &ModelSource, jobs: usize, config: SessionConfig) -> Result<Cac
             .with_intra_threads(intra_op_threads(jobs))
             .map_err(ort_error)?;
     }
-    builder = with_runner(builder, config)?;
+    builder = with_runner(builder, source, config)?;
     let session = match source {
         ModelSource::File(path) => builder
             .commit_from_file(path)
@@ -71,17 +85,20 @@ fn build(source: &ModelSource, jobs: usize, config: SessionConfig) -> Result<Cac
             source.file_name()
         )));
     }
-    Ok(Cached {
-        source: source.clone(),
-        jobs,
-        config,
-        session,
-    })
+    Ok(session)
 }
 
 /// Register the execution provider [`SessionConfig`] selects. `Cpu` registers
 /// nothing: ONNX Runtime's implicit CPU execution provider is the default.
-fn with_runner(builder: SessionBuilder, config: SessionConfig) -> Result<SessionBuilder, Error> {
+fn with_runner(
+    builder: SessionBuilder,
+    #[cfg_attr(
+        not(all(target_os = "macos", target_arch = "aarch64")),
+        expect(unused_variables, reason = "only Core ML keys its cache by the model")
+    )]
+    source: &ModelSource,
+    config: SessionConfig,
+) -> Result<SessionBuilder, Error> {
     match config.runner {
         Runner::Cpu => Ok(builder),
         Runner::DirectMl => {
@@ -114,6 +131,26 @@ fn with_runner(builder: SessionBuilder, config: SessionConfig) -> Result<Session
             {
                 Err(Error::Ort(
                     "DirectML is only available in Windows ML builds; select the CPU runner"
+                        .to_string(),
+                ))
+            }
+        }
+        Runner::CoreMl => {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            {
+                builder
+                    .with_execution_providers([crate::coreml::execution_provider(source)?])
+                    .map_err(|error| {
+                        Error::Ort(format!(
+                            "cannot register the Core ML execution provider: {error}"
+                        ))
+                    })
+            }
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+            {
+                Err(Error::Ort(
+                    "Core ML is only available in Apple-silicon macOS ML builds; select the CPU \
+                     runner"
                         .to_string(),
                 ))
             }

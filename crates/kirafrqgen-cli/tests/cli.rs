@@ -678,6 +678,55 @@ fn a_directml_runner_without_directml_fails_early() {
     );
 }
 
+/// On platforms without the Core ML execution provider, selecting the runner
+/// fails at configuration time with the reason, before any write.
+#[test]
+fn a_coreml_runner_without_coreml_fails_early() {
+    if !cfg!(feature = "ml")
+        || cfg!(all(
+            target_os = "macos",
+            target_arch = "aarch64",
+            feature = "ml"
+        ))
+    {
+        return;
+    }
+    let scratch = Scratch::new("coreml-unavailable");
+    write_tone(&scratch, "bank/A2.wav");
+
+    let run = cli(
+        &scratch.0,
+        &["bank", "--estimator", "swiftf0", "--ml-runner", "coreml"],
+    );
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    assert!(run.stderr.contains("Core ML"), "{}", run.stderr);
+    assert!(
+        !scratch.path("bank/A2_wav.frq").exists(),
+        "the run fails before any write"
+    );
+}
+
+/// On Apple silicon, Core ML runs SwiftF0 end to end and writes the table.
+#[test]
+fn a_coreml_runner_writes_tables_on_apple_silicon() {
+    if !cfg!(all(
+        target_os = "macos",
+        target_arch = "aarch64",
+        feature = "ml"
+    )) {
+        return;
+    }
+    let scratch = Scratch::new("coreml-run");
+    write_tone(&scratch, "bank/A2.wav");
+
+    let run = cli(
+        &scratch.0,
+        &["bank", "--estimator", "swiftf0", "--ml-runner", "coreml"],
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(scratch.path("bank/A2_wav.frq").exists(), "{}", run.stderr);
+}
+
 /// The committed tiny ONNX fixture has RMVPE's I/O contract; with it in
 /// `KIRAFRQ_ML_DIR` the CLI must run the ML path end to end (modern build
 /// only) and write a table that keeps the #8 conventions.

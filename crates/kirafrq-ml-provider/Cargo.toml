@@ -9,9 +9,9 @@ license.workspace = true
 [features]
 default = []
 # The RMVPE model path (ONNX Runtime session, log-mel frontend, decoder). All
-# `ort` use is confined to the `rmvpe` module; the model-free half compiles
+# `ort` use is confined to the model modules; the model-free half compiles
 # and tests with this feature off (#48/#56).
-ort = ["dep:ort", "dep:realfft"]
+ort = ["dep:ort", "dep:realfft", "dep:sha2"]
 
 [dependencies]
 rubato.workspace = true
@@ -26,9 +26,15 @@ ort = { workspace = true, optional = true, features = ["directml"] }
 # is the DirectML `device_id`.
 windows = { workspace = true, features = ["Win32_Graphics_Dxgi"] }
 
+# Core ML is macOS-only: ONNX Runtime 1.28's prebuilt carries it for
+# `aarch64-apple-darwin` alone. `sha2` keys its model cache by content.
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { workspace = true, optional = true, features = ["coreml"] }
+sha2 = { workspace = true, optional = true }
+
 [dev-dependencies]
 # The bundled SwiftF0 model's pinned-commit provenance check (#69).
-sha2 = "0.10"
+sha2.workspace = true
 # Decoding wavs for the local SwiftF0 parity probe (#69).
 kirafrq-audio.workspace = true
 
@@ -41,5 +47,5 @@ name = "swiftf0_probe"
 required-features = ["ort"]
 
 [[example]]
-name = "directml_probe"
+name = "runner_probe"
 required-features = ["ort"]

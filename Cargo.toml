@@ -59,6 +59,8 @@ egui-phosphor = "0.14"
 arboard = { version = "3", default-features = false }
 # DXGI adapter enumeration for the DirectML device picker (Windows only).
 windows = "0.62"
+# SHA-256: the bundled SwiftF0 provenance check and the Core ML model cache key.
+sha2 = "0.11"
 
 kirafrq-formats = { path = "crates/kirafrq-formats" }
 kirafrq-audio = { path = "crates/kirafrq-audio" }
