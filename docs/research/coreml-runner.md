@@ -86,6 +86,20 @@ Local runs keep one session; the ML server (#85) is where more sessions pay off.
 | First call at a new length, minus warm | ~0 | ~3–7 ms; the first call of all ~30 ms |
 | Max pitch drift vs CPU | reference | 0.066 Hz (0.45 cents), 0 of 1,164 frames flip |
 
+The options, varied one at a time against the shipped NeuralNetwork + CPU-and-GPU (a separate
+cache per run, so a cold and a warm-cache session each; times from the warm-cache run):
+
+| Format, compute units | Warm, per audio-second | First call at a new length | Drift vs CPU |
+| --- | --- | --- | --- |
+| NeuralNetwork, CPU and GPU (shipped) | 10.1–10.3 ms | ~3–7 ms over warm | 0.45 cents |
+| NeuralNetwork, ALL | 10.4 ms | the first call of all ~165 ms, then as above | 0.45 cents |
+| MLProgram, CPU and GPU | 35.8 ms* | ~260 ms at every length | 0.00 cents |
+| MLProgram, ALL | 37.6 ms* | ~255–285 ms at every length; the first ~675 ms | 0.00 cents |
+
+\* MLProgram keeps only the shape seen last, so the probe's warm loop, which steps through four
+lengths, pays one ~260 ms re-specialization per length. A real voicebank changes length on
+nearly every wav, so this mixed figure, not the single-length speed, is what a run sees.
+
 SwiftF0 under Core ML matched CPU to 1.5e-5 Hz with no flips, at the same ~2.5–4 ms per
 audio-second as CPU. The provider test `tests/coreml.rs` pins the SwiftF0 parity and the cache
 keying on Apple-silicon CI.
