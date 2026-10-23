@@ -1,8 +1,8 @@
 //! The KiraFrqGen window (#23): shell B from #13 — options sidebar, drop area
 //! that becomes a tri-state wav tree, and an in-place run view fed by the
 //! pipeline's progress events. Settings live for the session only (#13),
-//! except the Advanced window's runner and device, which eframe's storage
-//! keeps in the user's app-data directory.
+//! except the Advanced window's runner, device and ML server, which eframe's
+//! storage keeps in the user's app-data directory.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -17,8 +17,9 @@ use eframe::egui::{
 use egui_phosphor::regular as icons;
 use kirafrqgen_core::{
     COREML_SUPPORTED, CancelToken, DIRECTML_SUPPORTED, Estimator, F0Config, FileReport,
-    GenerateOptions, MlConfig, MlDevice, MlRunner, Progress, RunSummary, Sharing, Target,
-    build_estimator, default_ml_runner, generate_wavs, ml_available, ml_runner_usable, plan,
+    GenerateOptions, ML_SERVER_DEFAULT_PORT, MlConfig, MlDevice, MlRunner, MlServer, MlServerInfo,
+    Progress, RunSummary, Sharing, Target, build_estimator, default_ml_runner, generate_wavs,
+    ml_available, ml_runner_usable, ml_server_info, plan,
 };
 
 use crate::run::{Row, RunState, Status};
@@ -41,10 +42,11 @@ const AUTOMATIC_DEVICE_LABEL: &str = "Automatic (high-performance GPU)";
 /// The key the Advanced settings live under in eframe's storage.
 const ADVANCED_STORAGE_KEY: &str = "advanced";
 
-/// The Advanced window's settings that survive a restart: the ML runner and,
-/// for DirectML, the adapter. eframe's persistence keeps the store in the
-/// user's app-data directory (`%APPDATA%\KiraFrqGen\data\app.ron` on Windows).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+/// The Advanced window's settings that survive a restart: the ML runner, for
+/// DirectML the adapter, and the ML server's address and token. eframe's
+/// persistence keeps the store in the user's app-data directory
+/// (`%APPDATA%\KiraFrqGen\data\app.ron` on Windows).
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct AdvancedSettings {
     /// The selected runner; absent in a store written in #81's format, where
@@ -52,6 +54,9 @@ struct AdvancedSettings {
     runner: Option<StoredRunner>,
     /// The DirectML adapter index; `None` is the automatic choice.
     directml_device: Option<u32>,
+    /// The Remote runner's ML server; kept whichever runner is selected, so
+    /// switching back to Remote finds it filled in.
+    remote: RemoteFields,
     /// #81's only runner field: the DirectML runner was selected. Read when
     /// `runner` is absent, never written. `false` is a CPU choice only where
     /// DirectML was offered; elsewhere CPU was the only option, so it carries
@@ -66,6 +71,54 @@ enum StoredRunner {
     Cpu,
     DirectMl,
     CoreMl,
+    Remote,
+}
+
+/// The Remote runner's fields as typed: host, port and the optional token.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct RemoteFields {
+    host: String,
+    port: u16,
+    token: String,
+}
+
+impl Default for RemoteFields {
+    fn default() -> Self {
+        Self {
+            host: String::new(),
+            port: ML_SERVER_DEFAULT_PORT,
+            token: String::new(),
+        }
+    }
+}
+
+impl RemoteFields {
+    /// The ML server these fields name; a bracketed IPv6 host is accepted.
+    fn server(&self) -> Result<MlServer, String> {
+        let host = self.host.trim();
+        let host = host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .unwrap_or(host);
+        if host.is_empty() {
+            return Err("Enter the ML server's host.".to_owned());
+        }
+        if host.chars().any(char::is_whitespace) {
+            return Err(format!("`{host}` is not a host name or address."));
+        }
+        if self.port == 0 {
+            return Err("Enter the ML server's port.".to_owned());
+        }
+        Ok(MlServer {
+            host: host.to_owned(),
+            port: self.port,
+        })
+    }
+
+    fn token(&self) -> Option<String> {
+        Some(self.token.trim().to_owned()).filter(|token| !token.is_empty())
+    }
 }
 
 impl From<StoredRunner> for MlRunner {
@@ -74,6 +127,7 @@ impl From<StoredRunner> for MlRunner {
             StoredRunner::Cpu => MlRunner::Cpu,
             StoredRunner::DirectMl => MlRunner::DirectMl,
             StoredRunner::CoreMl => MlRunner::CoreMl,
+            StoredRunner::Remote => MlRunner::Remote,
         }
     }
 }
@@ -84,6 +138,7 @@ impl From<MlRunner> for StoredRunner {
             MlRunner::Cpu => StoredRunner::Cpu,
             MlRunner::DirectMl => StoredRunner::DirectMl,
             MlRunner::CoreMl => StoredRunner::CoreMl,
+            MlRunner::Remote => StoredRunner::Remote,
         }
     }
 }
@@ -112,12 +167,21 @@ impl AdvancedSettings {
             _ if !usable(runner) => (MlRunner::Cpu, None),
             MlRunner::DirectMl => (MlRunner::DirectMl, stored.directml_device),
             MlRunner::CoreMl => (MlRunner::CoreMl, None),
+            MlRunner::Remote => (MlRunner::Remote, None),
         }
+    }
+
+    /// The stored ML server fields, or empty ones with the default port.
+    fn load_remote(storage: Option<&dyn eframe::Storage>) -> RemoteFields {
+        storage
+            .and_then(|storage| eframe::get_value::<Self>(storage, ADVANCED_STORAGE_KEY))
+            .map(|stored| stored.remote)
+            .unwrap_or_default()
     }
 
     /// Snapshot the live state; the device only applies while the DirectML
     /// runner is selected.
-    fn from_app(ml_runner: MlRunner, directml_device: Option<u32>) -> Self {
+    fn from_app(ml_runner: MlRunner, directml_device: Option<u32>, remote: &RemoteFields) -> Self {
         Self {
             runner: Some(ml_runner.into()),
             directml_device: if ml_runner.is_directml() {
@@ -125,19 +189,69 @@ impl AdvancedSettings {
             } else {
                 None
             },
+            remote: remote.clone(),
             directml: false,
         }
     }
 
     /// Write to eframe's storage; the framework flushes it periodically and
     /// on shutdown.
-    fn store(self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, ADVANCED_STORAGE_KEY, &self);
+    fn store(&self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, ADVANCED_STORAGE_KEY, self);
     }
 }
 
 fn estimator_runnable(estimator: Estimator, ml_available: bool) -> bool {
     estimator != Estimator::Rmvpe || ml_available
+}
+
+/// What the ML server last answered (#85). Checked in the background when the
+/// Remote runner or its address changes, and on Test connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RemoteStatus {
+    /// Not asked since the runner or address last changed.
+    Unchecked,
+    Checking,
+    Ready(MlServerInfo),
+    /// Unreachable, incompatible, or the token is missing or wrong.
+    Failed(String),
+}
+
+/// A finished server check: its generation and the server's answer.
+type RemoteAnswer = (u64, Result<MlServerInfo, String>);
+
+/// Why Generate is disabled for the selected estimator, if it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EstimatorBlock {
+    /// RMVPE's model file is missing here (#72): the hint links to the README.
+    ModelMissing,
+    /// The ML server cannot run it right now; the reason is shown as is.
+    Server(String),
+}
+
+/// The Remote runner's verdict for `estimator`: the DSP estimators always run
+/// here; an ML estimator needs a server that answered and can run it.
+fn remote_block(estimator: Estimator, status: &RemoteStatus) -> Option<EstimatorBlock> {
+    let model = match estimator {
+        Estimator::Dio | Estimator::Harvest => return None,
+        Estimator::Rmvpe => "RMVPE",
+        Estimator::SwiftF0 => "SwiftF0",
+    };
+    let reason = match status {
+        RemoteStatus::Ready(info) => {
+            let available = match estimator {
+                Estimator::Rmvpe => info.rmvpe,
+                _ => info.swiftf0,
+            };
+            if available {
+                return None;
+            }
+            format!("The ML server cannot run {model}: its model file is missing there.")
+        }
+        RemoteStatus::Failed(reason) => format!("The ML server is not usable: {reason}"),
+        RemoteStatus::Unchecked | RemoteStatus::Checking => "Checking the ML server…".to_owned(),
+    };
+    Some(EstimatorBlock::Server(reason))
 }
 
 /// The DirectML device combo's selected text: `Automatic` or the named
@@ -336,6 +450,18 @@ pub struct KiraFrqGenApp {
     /// The enumerated adapters, or why they could not be listed; reloaded
     /// when the Advanced window opens and on Refresh.
     directml_devices: Result<Vec<MlDevice>, String>,
+    /// The Remote runner's server, persisted with the runner.
+    remote: RemoteFields,
+    remote_status: RemoteStatus,
+    /// The background check's answer, tagged with its generation so a stale
+    /// answer for an older address is dropped.
+    remote_answer: Arc<Mutex<Option<RemoteAnswer>>>,
+    remote_generation: u64,
+    /// A server field has focus: the check waits until editing ends.
+    remote_editing: bool,
+    /// The user picked an estimator; a server's answer no longer moves the
+    /// capability-aware default.
+    estimator_chosen: bool,
 
     run: Option<RunSession>,
 }
@@ -347,6 +473,7 @@ impl KiraFrqGenApp {
             .unwrap_or(4);
         let ml_available = ml_available(&F0Config::default());
         let (ml_runner, directml_device) = AdvancedSettings::load(storage, ml_runner_usable);
+        let remote = AdvancedSettings::load_remote(storage);
         let mut app = Self {
             estimator: kirafrqgen_core::default_estimator(ml_available),
             ml_available,
@@ -371,6 +498,12 @@ impl KiraFrqGenApp {
             ml_runner,
             directml_device,
             directml_devices: Ok(Vec::new()),
+            remote,
+            remote_status: RemoteStatus::Unchecked,
+            remote_answer: Arc::new(Mutex::new(None)),
+            remote_generation: 0,
+            remote_editing: false,
+            estimator_chosen: false,
             run: None,
         };
         if app.ml_runner.is_directml() {
@@ -434,6 +567,8 @@ impl KiraFrqGenApp {
                     } else {
                         None
                     },
+                    server: self.remote.server().ok(),
+                    server_token: self.remote.token(),
                     ..MlConfig::default()
                 },
                 ..F0Config::default()
@@ -535,6 +670,147 @@ impl KiraFrqGenApp {
         }
     }
 
+    /// Why Generate is disabled for the selected estimator: with the Remote
+    /// runner the server decides, otherwise the local model file (#72).
+    fn estimator_block(&self) -> Option<EstimatorBlock> {
+        if self.ml_runner.is_remote() {
+            return remote_block(self.estimator, &self.remote_status);
+        }
+        (!estimator_runnable(self.estimator, self.ml_available))
+            .then_some(EstimatorBlock::ModelMissing)
+    }
+
+    /// Ask the ML server in the background; the answer lands in
+    /// [`Self::poll_remote`].
+    fn check_remote(&mut self, ctx: &egui::Context) {
+        self.remote_generation += 1;
+        let server = match self.remote.server() {
+            Ok(server) => server,
+            Err(reason) => {
+                self.remote_status = RemoteStatus::Failed(reason);
+                return;
+            }
+        };
+        let config = MlConfig {
+            runner: MlRunner::Remote,
+            server: Some(server),
+            server_token: self.remote.token(),
+            ..MlConfig::default()
+        };
+        self.remote_status = RemoteStatus::Checking;
+        let generation = self.remote_generation;
+        let answer = Arc::clone(&self.remote_answer);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let info = ml_server_info(&config);
+            *answer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((generation, info));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Take a finished check's answer, and start one when the Remote runner's
+    /// server has not been asked since it changed.
+    fn poll_remote(&mut self, ctx: &egui::Context) {
+        let answer = self
+            .remote_answer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some((generation, info)) = answer
+            && generation == self.remote_generation
+        {
+            self.remote_status = match info {
+                Ok(info) => {
+                    if !self.estimator_chosen {
+                        self.estimator = kirafrqgen_core::default_estimator(info.rmvpe);
+                    }
+                    RemoteStatus::Ready(info)
+                }
+                Err(reason) => RemoteStatus::Failed(reason),
+            };
+        }
+        if self.ml_runner.is_remote()
+            && self.remote_status == RemoteStatus::Unchecked
+            && !self.remote_editing
+        {
+            self.check_remote(ctx);
+        }
+    }
+
+    /// The Advanced window's ML server block: host, port, token, Test
+    /// connection and the last answer.
+    fn remote_settings(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        ui.label(RichText::new("ML SERVER").size(13.0).strong());
+        let mut changed = false;
+        let mut editing = false;
+        egui::Grid::new("ml_server")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Host");
+                let host = ui.add(
+                    egui::TextEdit::singleline(&mut self.remote.host)
+                        .hint_text("192.168.1.20 or mac.local")
+                        .desired_width(220.0),
+                );
+                ui.end_row();
+                ui.label("Port");
+                let port = ui.add(egui::DragValue::new(&mut self.remote.port).range(1..=65_535));
+                ui.end_row();
+                ui.label("Token");
+                let token = ui.add(
+                    egui::TextEdit::singleline(&mut self.remote.token)
+                        .password(true)
+                        .hint_text("only if the server has one")
+                        .desired_width(220.0),
+                );
+                ui.end_row();
+                for response in [host, port, token] {
+                    changed |= response.changed();
+                    editing |= response.has_focus();
+                }
+            });
+        self.remote_editing = editing;
+        if changed {
+            self.remote_status = RemoteStatus::Unchecked;
+        }
+        ui.horizontal(|ui| {
+            let checking = self.remote_status == RemoteStatus::Checking;
+            if ui
+                .add_enabled(!checking, egui::Button::new("Test connection"))
+                .clicked()
+            {
+                self.check_remote(ui.ctx());
+            }
+            if checking {
+                ui.spinner();
+            }
+        });
+        match &self.remote_status {
+            RemoteStatus::Ready(info) => {
+                ui.label(format!("{} Connected: {}", icons::CHECK, info.summary));
+                if let Some(warning) = &info.version_warning {
+                    ui.colored_label(ui.visuals().warn_fg_color, warning);
+                }
+            }
+            RemoteStatus::Failed(reason) => {
+                ui.colored_label(ui.visuals().error_fg_color, reason);
+            }
+            RemoteStatus::Unchecked | RemoteStatus::Checking => {}
+        }
+        ui.label(
+            RichText::new(
+                "Only ML estimation runs on the server; everything else stays on this machine. \
+                 The server's model files are used. The token is a lock against casual use, not \
+                 encryption.",
+            )
+            .weak(),
+        );
+    }
+
     /// The hamburger's Advanced window: the ML runner and, for DirectML, the
     /// adapter. The device list is enumerated when the window is opened and
     /// on Refresh; `Automatic` always stays available when enumeration fails.
@@ -555,6 +831,7 @@ impl KiraFrqGenApp {
                 }
                 ui.add_enabled_ui(!self.is_running(), |ui| {
                     ui.label(RichText::new("ML RUNNER").size(13.0).strong());
+                    let before = self.ml_runner;
                     ui.radio_value(&mut self.ml_runner, MlRunner::Cpu, "CPU");
                     if DIRECTML_SUPPORTED {
                         ui.radio_value(&mut self.ml_runner, MlRunner::DirectMl, "DirectML");
@@ -574,7 +851,15 @@ impl KiraFrqGenApp {
                             .weak(),
                         );
                     }
+                    ui.radio_value(&mut self.ml_runner, MlRunner::Remote, "Remote server");
+                    if self.ml_runner != before && self.ml_runner.is_remote() {
+                        self.remote_status = RemoteStatus::Unchecked;
+                    }
                     ui.label(RichText::new(self.ml_runner.description()).weak());
+
+                    if self.ml_runner.is_remote() {
+                        self.remote_settings(ui);
+                    }
 
                     if self.ml_runner.is_directml() {
                         ui.add_space(8.0);
@@ -714,28 +999,45 @@ impl KiraFrqGenApp {
                 // #48: the compat build has no ML option at all. A missing
                 // model leaves the ML radio enabled; the hint below and the
                 // disabled Generate carry the unavailability (#72).
+                let mut choices = Vec::new();
                 if cfg!(feature = "ml") {
-                    ui.radio_value(&mut self.estimator, Estimator::Rmvpe, "RMVPE");
+                    choices.push(ui.radio_value(&mut self.estimator, Estimator::Rmvpe, "RMVPE"));
                     // #69: SwiftF0 ships a bundled model, so it is always
                     // selectable in a modern build.
-                    ui.radio_value(&mut self.estimator, Estimator::SwiftF0, "SwiftF0");
+                    choices.push(ui.radio_value(
+                        &mut self.estimator,
+                        Estimator::SwiftF0,
+                        "SwiftF0",
+                    ));
                 }
-                ui.radio_value(&mut self.estimator, Estimator::Harvest, "Harvest");
-                ui.radio_value(&mut self.estimator, Estimator::Dio, "DIO");
+                choices.push(ui.radio_value(&mut self.estimator, Estimator::Harvest, "Harvest"));
+                choices.push(ui.radio_value(&mut self.estimator, Estimator::Dio, "DIO"));
+                if choices.iter().any(egui::Response::clicked) {
+                    self.estimator_chosen = true;
+                }
             });
             ui.label(RichText::new(self.estimator.description()).weak());
-            if !estimator_runnable(self.estimator, self.ml_available) {
-                ui.horizontal_wrapped(|ui| {
-                    let red = ui.visuals().error_fg_color;
-                    let link = ui.visuals().hyperlink_color;
-                    ui.colored_label(red, "The model required for this estimator is not found.");
-                    ui.hyperlink_to(
-                        RichText::new("Click here to see how to obtain it.")
-                            .color(link)
-                            .underline(),
-                        MODEL_HELP_URL,
-                    );
-                });
+            match self.estimator_block() {
+                Some(EstimatorBlock::ModelMissing) => {
+                    ui.horizontal_wrapped(|ui| {
+                        let red = ui.visuals().error_fg_color;
+                        let link = ui.visuals().hyperlink_color;
+                        ui.colored_label(
+                            red,
+                            "The model required for this estimator is not found.",
+                        );
+                        ui.hyperlink_to(
+                            RichText::new("Click here to see how to obtain it.")
+                                .color(link)
+                                .underline(),
+                            MODEL_HELP_URL,
+                        );
+                    });
+                }
+                Some(EstimatorBlock::Server(reason)) => {
+                    ui.colored_label(ui.visuals().error_fg_color, reason);
+                }
+                None => {}
             }
 
             ui.add_space(8.0);
@@ -796,7 +1098,7 @@ impl KiraFrqGenApp {
                 && !self.selected.is_empty()
                 && self.targets.any()
                 && self.tree.is_some()
-                && estimator_runnable(self.estimator, self.ml_available);
+                && self.estimator_block().is_none();
             if running {
                 let cancelling = self
                     .run_state()
@@ -1181,10 +1483,12 @@ impl KiraFrqGenApp {
 
 impl eframe::App for KiraFrqGenApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        AdvancedSettings::from_app(self.ml_runner, self.directml_device).store(storage);
+        AdvancedSettings::from_app(self.ml_runner, self.directml_device, &self.remote)
+            .store(storage);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.poll_remote(ui.ctx());
         let running = self.is_running();
 
         if !running {
@@ -1668,20 +1972,23 @@ mod tests {
     #[test]
     fn a_stored_advanced_choice_survives_a_round_trip() {
         let mut storage = TestStorage::default();
-        AdvancedSettings::from_app(MlRunner::DirectMl, Some(2)).store(&mut storage);
+        AdvancedSettings::from_app(MlRunner::DirectMl, Some(2), &RemoteFields::default())
+            .store(&mut storage);
         assert_eq!(
             AdvancedSettings::load(Some(&storage), |_| true),
             (MlRunner::DirectMl, Some(2))
         );
 
-        AdvancedSettings::from_app(MlRunner::CoreMl, Some(2)).store(&mut storage);
+        AdvancedSettings::from_app(MlRunner::CoreMl, Some(2), &RemoteFields::default())
+            .store(&mut storage);
         assert_eq!(
             AdvancedSettings::load(Some(&storage), |_| true),
             (MlRunner::CoreMl, None),
             "Core ML carries no adapter"
         );
 
-        AdvancedSettings::from_app(MlRunner::Cpu, Some(2)).store(&mut storage);
+        AdvancedSettings::from_app(MlRunner::Cpu, Some(2), &RemoteFields::default())
+            .store(&mut storage);
         assert_eq!(
             AdvancedSettings::load(Some(&storage), |_| true),
             (MlRunner::Cpu, None),
@@ -1690,10 +1997,72 @@ mod tests {
     }
 
     #[test]
+    fn the_remote_runner_and_its_server_survive_a_round_trip() {
+        let remote = RemoteFields {
+            host: "192.168.1.20".to_owned(),
+            port: 40000,
+            token: "open sesame".to_owned(),
+        };
+        let mut storage = TestStorage::default();
+        AdvancedSettings::from_app(MlRunner::Remote, Some(2), &remote).store(&mut storage);
+        assert_eq!(
+            AdvancedSettings::load(Some(&storage), |_| true),
+            (MlRunner::Remote, None),
+            "the remote runner carries no adapter"
+        );
+        assert_eq!(AdvancedSettings::load_remote(Some(&storage)), remote);
+
+        // Switching away keeps the server for the next time Remote is picked.
+        AdvancedSettings::from_app(MlRunner::Cpu, None, &remote).store(&mut storage);
+        assert_eq!(
+            AdvancedSettings::load(Some(&storage), |_| true),
+            (MlRunner::Cpu, None)
+        );
+        assert_eq!(AdvancedSettings::load_remote(Some(&storage)), remote);
+    }
+
+    #[test]
+    fn a_first_run_has_no_server_and_the_default_port() {
+        let remote = AdvancedSettings::load_remote(None);
+        assert_eq!(remote.host, "");
+        assert_eq!(remote.port, 39470);
+        assert_eq!(remote.token(), None);
+        assert!(remote.server().is_err());
+
+        // A store from before the Remote runner loads the same way.
+        let mut storage = TestStorage::default();
+        eframe::Storage::set_string(
+            &mut storage,
+            ADVANCED_STORAGE_KEY,
+            "(runner: Some(CoreMl), directml_device: None)".to_owned(),
+        );
+        assert_eq!(AdvancedSettings::load_remote(Some(&storage)), remote);
+    }
+
+    #[test]
+    fn the_server_fields_accept_a_bracketed_ipv6_host() {
+        let fields = |host: &str| RemoteFields {
+            host: host.to_owned(),
+            ..RemoteFields::default()
+        };
+        assert_eq!(
+            fields(" [fe80::1] ").server().unwrap(),
+            MlServer {
+                host: "fe80::1".to_owned(),
+                port: 39470
+            }
+        );
+        assert_eq!(fields("mac.local").server().unwrap().host, "mac.local");
+        assert!(fields("  ").server().is_err());
+        assert!(fields("a b").server().is_err());
+    }
+
+    #[test]
     fn a_stored_gpu_choice_steps_down_when_unusable() {
         for runner in [MlRunner::DirectMl, MlRunner::CoreMl] {
             let mut storage = TestStorage::default();
-            AdvancedSettings::from_app(runner, Some(2)).store(&mut storage);
+            AdvancedSettings::from_app(runner, Some(2), &RemoteFields::default())
+                .store(&mut storage);
             assert_eq!(
                 AdvancedSettings::load(Some(&storage), |_| false),
                 (MlRunner::Cpu, None),
