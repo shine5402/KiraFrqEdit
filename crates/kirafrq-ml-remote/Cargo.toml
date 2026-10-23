@@ -1,0 +1,23 @@
+[package]
+name = "kirafrq-ml-remote"
+description = "The ML server: wire protocol, client and server for remote ML f0 estimation"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# The server half runs the models, so it needs ONNX Runtime; the client half
+# (protocol, FLAC encode, HTTP client) needs only the provider's model-free
+# layer.
+server = ["dep:tiny_http", "dep:claxon", "kirafrq-ml-provider/ort"]
+
+[dependencies]
+kirafrq-ml-provider.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true
+flacenc.workspace = true
+tiny_http = { workspace = true, optional = true }
+claxon = { workspace = true, optional = true }

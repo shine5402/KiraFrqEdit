@@ -5,6 +5,7 @@ members = [
     "crates/kirafrq-audio",
     "crates/kirafrq-world-binding",
     "crates/kirafrq-ml-provider",
+    "crates/kirafrq-ml-remote",
     "crates/kirafrq-credits",
     "crates/kirafrqgen-core",
     "crates/kirafrqgen-cli",
@@ -59,6 +60,17 @@ egui-phosphor = "0.14"
 arboard = { version = "3", default-features = false }
 # DXGI adapter enumeration for the DirectML device picker (Windows only).
 windows = "0.62"
+# The ML server (#85): plain HTTP/1.1 with small synchronous libraries (no
+# async runtime) and pure-Rust FLAC, so no CMake or C build on any CI
+# compiler. The client needs no TLS. Exact pins; bump deliberately.
+tiny_http = "=0.12.0"
+ureq = { version = "=3.5.0", default-features = false }
+# flacenc's defaults add a thread pool, serde and log for nothing we use.
+flacenc = { version = "=0.5.1", default-features = false }
+claxon = "=0.4.3"
+# `float_roundtrip`: f0 values cross the wire as JSON numbers and must come
+# back bit-exact.
+serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
 # SHA-256: the bundled SwiftF0 provenance check and the Core ML model cache key.
 sha2 = "0.11"
 
@@ -66,5 +78,6 @@ kirafrq-formats = { path = "crates/kirafrq-formats" }
 kirafrq-audio = { path = "crates/kirafrq-audio" }
 kirafrq-world-binding = { path = "crates/kirafrq-world-binding" }
 kirafrq-ml-provider = { path = "crates/kirafrq-ml-provider" }
+kirafrq-ml-remote = { path = "crates/kirafrq-ml-remote" }
 kirafrq-credits = { path = "crates/kirafrq-credits" }
 kirafrqgen-core = { path = "crates/kirafrqgen-core", default-features = false }
