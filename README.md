@@ -68,7 +68,7 @@ kirafrqgen-cli bank --ml-runner remote --ml-server 192.168.1.20:39470 --ml-serve
 ```
 
 Only ML f0 estimation travels: each wav's audio goes to the server unchanged (lossless) and its
-f0 comes back, so the tables match a local run on the server's runner. DIO and Harvest still run
+f0 comes back, so the tables match a local run on the server's runner and thread count. DIO and Harvest still run
 on the client. The token keeps casual users on the network out; the connection is plain HTTP,
 not encrypted, so use it on a network you trust.
 

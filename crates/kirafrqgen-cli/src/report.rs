@@ -110,9 +110,13 @@ impl Reporter {
     /// The status line for the current state, if any.
     fn status_line(state: &ProgressState) -> Option<String> {
         match state.current {
-            Some((ref wav, done, total)) if total > 0 => {
-                Some(detailed_line(state.finished, state.total, wav, done, total))
-            }
+            Some((ref wav, done, total)) if total > 0 => Some(detailed_line(
+                state.finished,
+                state.total,
+                wav,
+                done,
+                total,
+            )),
             _ => None,
         }
         .or_else(|| {
@@ -619,7 +623,13 @@ mod tests {
         // No prior render always renders.
         assert!(should_render_progress(None, None, false, 1, now));
         // A new wav always renders.
-        assert!(should_render_progress(Some(now), Some(500), true, 500, now));
+        assert!(should_render_progress(
+            Some(now),
+            Some(500),
+            true,
+            500,
+            now
+        ));
         // Tiny advances within the time slice are swallowed.
         assert!(!should_render_progress(
             Some(now),

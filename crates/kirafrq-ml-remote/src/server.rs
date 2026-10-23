@@ -17,8 +17,8 @@ use kirafrq_ml_provider::swiftf0::SwiftF0;
 use kirafrq_ml_provider::{ModelError, ModelSource, SessionConfig, UvPolicy};
 
 use crate::{
-    DEFAULT_PORT, ErrorBody, Estimate, EstimateParams, Estimators, Info, MAX_BODY_BYTES, Model,
-    PROTOCOL_VERSION, VERSION, audio,
+    DEFAULT_PORT, ErrorBody, Estimate, EstimateParams, Estimators, Info, MAX_BODY_BYTES,
+    MlEstimator, PROTOCOL_VERSION, VERSION, audio,
 };
 
 /// The ports tried after [`DEFAULT_PORT`] before an OS-assigned one.
@@ -71,7 +71,10 @@ pub enum ServerError {
     /// Binding failed for another reason.
     Bind(std::io::Error),
     /// An ML estimator's sessions could not be built or warmed.
-    Model { model: Model, message: String },
+    Model {
+        estimator: MlEstimator,
+        message: String,
+    },
 }
 
 impl fmt::Display for ServerError {
@@ -83,8 +86,8 @@ impl fmt::Display for ServerError {
                  the default"
             ),
             ServerError::Bind(error) => write!(f, "cannot listen: {error}"),
-            ServerError::Model { model, message } => {
-                write!(f, "cannot load {}: {message}", model.name())
+            ServerError::Model { estimator, message } => {
+                write!(f, "cannot load {}: {message}", estimator.name())
             }
         }
     }
@@ -98,7 +101,7 @@ pub struct Server {
     address: SocketAddr,
     port_warning: Option<String>,
     rmvpe_missing: Option<ModelError>,
-    backend: Arc<Backend>,
+    handlers: Arc<Handlers>,
 }
 
 impl Server {
@@ -114,8 +117,8 @@ impl Server {
                     .with_session_config(options.session_config);
                 let estimator = estimator
                     .with_own_session()
-                    .map_err(model_error(Model::Rmvpe))?;
-                estimator.warm().map_err(model_error(Model::Rmvpe))?;
+                    .map_err(model_error(MlEstimator::Rmvpe))?;
+                estimator.warm().map_err(model_error(MlEstimator::Rmvpe))?;
                 (Some(estimator), None)
             }
             Err(missing) => (None, Some(missing)),
@@ -124,8 +127,8 @@ impl Server {
             .with_session_config(options.session_config);
         let swiftf0 = swiftf0
             .with_own_session()
-            .map_err(model_error(Model::SwiftF0))?;
-        swiftf0.warm().map_err(model_error(Model::SwiftF0))?;
+            .map_err(model_error(MlEstimator::SwiftF0))?;
+        swiftf0.warm().map_err(model_error(MlEstimator::SwiftF0))?;
 
         let http = tiny_http::Server::from_listener(listener, None)
             .map_err(|error| ServerError::Bind(std::io::Error::other(error)))?;
@@ -134,7 +137,7 @@ impl Server {
             address,
             port_warning,
             rmvpe_missing,
-            backend: Arc::new(Backend {
+            handlers: Arc::new(Handlers {
                 token: options.token.filter(|token| !token.is_empty()),
                 runner_label: options.runner_label,
                 device_label: options.device_label,
@@ -162,7 +165,7 @@ impl Server {
 
     /// What `/v1/info` reports (for a request without a token).
     pub fn info(&self) -> Info {
-        self.backend.info(false)
+        self.handlers.info(false)
     }
 
     /// Start answering on background threads; dropping the handle stops them.
@@ -173,11 +176,11 @@ impl Server {
             .map(|_| {
                 let http = Arc::clone(&http);
                 let stop = Arc::clone(&stop);
-                let backend = Arc::clone(&self.backend);
+                let handlers = Arc::clone(&self.handlers);
                 std::thread::spawn(move || {
                     while !stop.load(Ordering::Relaxed) {
                         match http.recv_timeout(POLL) {
-                            Ok(Some(request)) => backend.handle(request),
+                            Ok(Some(request)) => handlers.handle(request),
                             Ok(None) => {}
                             Err(_) => std::thread::sleep(POLL),
                         }
@@ -216,9 +219,9 @@ impl Drop for RunningServer {
     }
 }
 
-fn model_error(model: Model) -> impl Fn(kirafrq_ml_provider::Error) -> ServerError {
+fn model_error(estimator: MlEstimator) -> impl Fn(kirafrq_ml_provider::Error) -> ServerError {
     move |error| ServerError::Model {
-        model,
+        estimator,
         message: error.to_string(),
     }
 }
@@ -258,8 +261,8 @@ fn bind(ip: IpAddr, port: Port) -> Result<(TcpListener, Option<String>), ServerE
     }
 }
 
-/// The request handlers and the models behind them.
-struct Backend {
+/// The request handlers and the ML estimators behind them.
+struct Handlers {
     token: Option<String>,
     runner_label: String,
     device_label: String,
@@ -270,7 +273,7 @@ struct Backend {
 /// A response: status and JSON body.
 type Reply = (u16, String);
 
-impl Backend {
+impl Handlers {
     fn info(&self, authorized: bool) -> Info {
         Info {
             protocol: PROTOCOL_VERSION,
@@ -350,8 +353,8 @@ impl Backend {
         let samples =
             audio::decode(&content_type, &body).map_err(|message| error(400, &message))?;
 
-        let track = match params.model {
-            Model::Rmvpe => {
+        let track = match params.estimator {
+            MlEstimator::Rmvpe => {
                 let rmvpe = self.rmvpe.as_ref().ok_or_else(|| {
                     error(
                         503,
@@ -361,7 +364,7 @@ impl Backend {
                 let policy = policy(UvPolicy::rmvpe(params.confidence_threshold), &params);
                 rmvpe.clone().with_policy(policy).estimate(&samples, None)
             }
-            Model::SwiftF0 => {
+            MlEstimator::SwiftF0 => {
                 let policy = policy(UvPolicy::swiftf0(params.confidence_threshold), &params);
                 self.swiftf0
                     .clone()
@@ -369,10 +372,7 @@ impl Backend {
                     .estimate(&samples, None)
             }
         }
-        .map_err(|failure| {
-            eprintln!("error: {} inference failed: {failure}", params.model.name());
-            error(500, &format!("inference failed: {failure}"))
-        })?;
+        .map_err(|failure| error(500, &format!("inference failed: {failure}")))?;
         Ok(json(200, &Estimate { f0_hz: track.f0_hz }))
     }
 }

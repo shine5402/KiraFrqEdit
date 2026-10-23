@@ -70,13 +70,6 @@ pub fn run(cli: &Cli) -> u8 {
 
     let info = server.info();
     let address = server.address();
-    let mut estimators = Vec::new();
-    if info.estimators.rmvpe {
-        estimators.push("RMVPE");
-    }
-    if info.estimators.swiftf0 {
-        estimators.push("SwiftF0");
-    }
     let lan: Vec<String> = lan_addresses()
         .into_iter()
         .map(|ip| format!("{ip}:{}", address.port()))
@@ -93,7 +86,7 @@ pub fn run(cli: &Cli) -> u8 {
         println!("Connect to: {}", lan.join(", "));
     }
     println!("ML runner: {runner_line}");
-    println!("ML estimators: {}", estimators.join(", "));
+    println!("ML estimators: {}", info.estimator_names().join(", "));
     println!(
         "Token: {}",
         if info.token_required {

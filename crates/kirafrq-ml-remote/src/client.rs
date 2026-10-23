@@ -8,7 +8,7 @@ use std::time::Duration;
 use kirafrq_ml_provider::grid::{TABLE_HOP_SAMPLES, table_frame_count};
 
 use crate::{
-    ErrorBody, Estimate, EstimateParams, Info, MAX_BODY_BYTES, Model, PROTOCOL_VERSION, audio,
+    ErrorBody, Estimate, EstimateParams, Info, MAX_BODY_BYTES, MlEstimator, PROTOCOL_VERSION, audio,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -30,7 +30,7 @@ pub enum ClientError {
     /// The server rejected the token.
     TokenRejected,
     /// The server cannot run the selected ML estimator.
-    Unavailable(Model),
+    Unavailable(MlEstimator),
     /// The server answered an estimate with an error.
     Server { status: u16, message: String },
     /// The audio could not be prepared for sending.
@@ -52,12 +52,12 @@ impl fmt::Display for ClientError {
                 write!(f, "the ML server requires a token; set the server's token")
             }
             ClientError::TokenRejected => write!(f, "the ML server rejected the token"),
-            ClientError::Unavailable(Model::Rmvpe) => write!(
+            ClientError::Unavailable(MlEstimator::Rmvpe) => write!(
                 f,
                 "the ML server cannot run RMVPE: its rmvpe.onnx was not found on the server"
             ),
-            ClientError::Unavailable(model) => {
-                write!(f, "the ML server cannot run {}", model.name())
+            ClientError::Unavailable(estimator) => {
+                write!(f, "the ML server cannot run {}", estimator.name())
             }
             ClientError::Server { status, message } => {
                 write!(f, "the ML server answered {status}: {message}")
@@ -143,10 +143,10 @@ impl Client {
     /// The configuration check before a run: the server answers this
     /// protocol, accepts the token and can run `model`. A differing
     /// KiraFrqGen version is left to [`Info::version_warning`].
-    pub fn check(&self, model: Model) -> Result<Info, ClientError> {
+    pub fn check(&self, estimator: MlEstimator) -> Result<Info, ClientError> {
         let info = self.check_access()?;
-        if !info.available(model) {
-            return Err(ClientError::Unavailable(model));
+        if !info.available(estimator) {
+            return Err(ClientError::Unavailable(estimator));
         }
         Ok(info)
     }

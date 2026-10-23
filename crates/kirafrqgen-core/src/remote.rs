@@ -2,7 +2,7 @@
 //! to an ML server. The pipeline sees only the seam, so decode, the energy
 //! voicing gate and every writer run here exactly as for a local estimate.
 
-use kirafrq_ml_remote::{Client, ClientError, EstimateParams, Model};
+use kirafrq_ml_remote::{Client, ClientError, EstimateParams, MlEstimator};
 
 use crate::{
     Estimator, F0Config, F0Estimator, F0Track, FrameObserver, GeneratorError, MlConfig,
@@ -29,8 +29,8 @@ pub(crate) fn server_info(config: &MlConfig) -> Result<MlServerInfo, String> {
         .map_err(|error| error.to_string())?;
     Ok(MlServerInfo {
         summary: info.summary(),
-        rmvpe: info.available(Model::Rmvpe),
-        swiftf0: info.available(Model::SwiftF0),
+        rmvpe: info.available(MlEstimator::Rmvpe),
+        swiftf0: info.available(MlEstimator::SwiftF0),
         version_warning: info.version_warning(),
     })
 }
@@ -39,9 +39,9 @@ pub(crate) fn server_info(config: &MlConfig) -> Result<MlServerInfo, String> {
 /// protocol, accepts the token and can run the selected ML estimator. Any of
 /// those failing is a configuration error before any file runs.
 pub(crate) fn build(config: &F0Config) -> Result<Box<dyn F0Estimator>, GeneratorError> {
-    let model = match config.estimator {
-        Estimator::Rmvpe => Model::Rmvpe,
-        Estimator::SwiftF0 => Model::SwiftF0,
+    let estimator = match config.estimator {
+        Estimator::Rmvpe => MlEstimator::Rmvpe,
+        Estimator::SwiftF0 => MlEstimator::SwiftF0,
         Estimator::Dio | Estimator::Harvest => {
             return Err(GeneratorError::Config(format!(
                 "{:?} is not an ML estimator",
@@ -51,12 +51,12 @@ pub(crate) fn build(config: &F0Config) -> Result<Box<dyn F0Estimator>, Generator
     };
     let client = client(&config.ml).map_err(GeneratorError::Config)?;
     client
-        .check(model)
+        .check(estimator)
         .map_err(|error| GeneratorError::Config(error.to_string()))?;
     Ok(Box::new(RemoteEstimator {
         client,
         params: EstimateParams {
-            model,
+            estimator,
             floor_hz: config.floor_hz,
             ceiling_hz: config.ceiling_hz,
             confidence_threshold: config.ml.confidence_threshold,
@@ -77,7 +77,8 @@ impl F0Estimator for RemoteEstimator {
         frame_period_ms: f64,
         observer: Option<&dyn FrameObserver>,
     ) -> Result<F0Track, GeneratorError> {
-        // The existing coarse tick: before the request, then done.
+        // One coarse tick, as a local estimate reports: before the request,
+        // then done.
         let report = |done| {
             if let Some(observer) = observer {
                 observer.report(ProgressStage::Estimate, done, 1);

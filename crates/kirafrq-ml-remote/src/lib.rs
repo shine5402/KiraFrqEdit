@@ -1,13 +1,8 @@
 //! The ML server (#85): a KiraFrqGen CLI in serve mode runs the ML estimators
 //! for other KiraFrqGen instances on the local network.
 //!
-//! Only ML f0 estimation crosses the network: the client sends the wav's
-//! decoded mono 44.1 kHz samples, exactly (lossless FLAC, or raw f64 when no
-//! FLAC bit depth holds them), plus the estimate parameters, and gets back the
-//! f0 on the 5.805 ms table grid. Nothing is resampled or rounded on the
-//! wire, so the server's model input is bit-identical to a local run's. The server holds no voicebank state; decode, the
-//! DSP estimators, the energy voicing gate and every writer stay on the
-//! client (`docs/adr/0002-ml-server-client-split.md`).
+//! Only ML f0 estimation crosses the network, with the audio sent exactly
+//! (`docs/adr/0002-ml-server-client-split.md`; the encoding is in `audio`).
 //!
 //! The crate splits by the `server` feature, like the provider splits by
 //! `ort`:
@@ -27,8 +22,6 @@
 //!   as JSON.
 //! - Errors are [`ErrorBody`] JSON with a meaningful status. The optional
 //!   token travels as `Authorization: Bearer <token>`; there is no TLS.
-//!
-//! This crate depends on the provider, never on `kirafrqgen-core`.
 
 mod audio;
 mod client;
@@ -38,7 +31,8 @@ pub mod server;
 pub use client::{Client, ClientError};
 
 /// The wire protocol's version; a server and client agree on it or the run
-/// stops before any file.
+/// stops before any file. Bump it when a change alters what the server
+/// computes for a request (ADR 0002).
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// The server's default port: unassigned in the IANA registry and below the
@@ -58,32 +52,32 @@ pub const SAMPLE_RATE: u32 = 44_100;
 
 /// An ML estimator the server can run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Model {
+pub enum MlEstimator {
     Rmvpe,
     SwiftF0,
 }
 
-impl Model {
+impl MlEstimator {
     /// The wire spelling.
     pub fn as_str(self) -> &'static str {
         match self {
-            Model::Rmvpe => "rmvpe",
-            Model::SwiftF0 => "swiftf0",
+            MlEstimator::Rmvpe => "rmvpe",
+            MlEstimator::SwiftF0 => "swiftf0",
         }
     }
 
     /// The user-facing name.
     pub fn name(self) -> &'static str {
         match self {
-            Model::Rmvpe => "RMVPE",
-            Model::SwiftF0 => "SwiftF0",
+            MlEstimator::Rmvpe => "RMVPE",
+            MlEstimator::SwiftF0 => "SwiftF0",
         }
     }
 
     fn parse(value: &str) -> Option<Self> {
         match value {
-            "rmvpe" => Some(Model::Rmvpe),
-            "swiftf0" => Some(Model::SwiftF0),
+            "rmvpe" => Some(MlEstimator::Rmvpe),
+            "swiftf0" => Some(MlEstimator::SwiftF0),
             _ => None,
         }
     }
@@ -110,10 +104,10 @@ pub struct Info {
 
 impl Info {
     /// Whether the server can run `model`.
-    pub fn available(&self, model: Model) -> bool {
-        match model {
-            Model::Rmvpe => self.estimators.rmvpe,
-            Model::SwiftF0 => self.estimators.swiftf0,
+    pub fn available(&self, estimator: MlEstimator) -> bool {
+        match estimator {
+            MlEstimator::Rmvpe => self.estimators.rmvpe,
+            MlEstimator::SwiftF0 => self.estimators.swiftf0,
         }
     }
 
@@ -129,13 +123,18 @@ impl Info {
         })
     }
 
+    /// The names of the ML estimators the server can run.
+    pub fn estimator_names(&self) -> Vec<&'static str> {
+        [MlEstimator::Rmvpe, MlEstimator::SwiftF0]
+            .into_iter()
+            .filter(|&estimator| self.available(estimator))
+            .map(MlEstimator::name)
+            .collect()
+    }
+
     /// One line for the front ends: version, runner and estimators.
     pub fn summary(&self) -> String {
-        let estimators: Vec<&str> = [Model::Rmvpe, Model::SwiftF0]
-            .into_iter()
-            .filter(|&model| self.available(model))
-            .map(Model::name)
-            .collect();
+        let estimators = self.estimator_names();
         let estimators = if estimators.is_empty() {
             "none".to_string()
         } else {
@@ -159,7 +158,7 @@ pub struct Estimators {
 /// The `POST /v1/estimate` parameters, carried in the query string.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EstimateParams {
-    pub model: Model,
+    pub estimator: MlEstimator,
     pub floor_hz: f64,
     pub ceiling_hz: f64,
     /// The #53 confidence override; `None` is the model's own default.
@@ -171,7 +170,7 @@ impl EstimateParams {
     pub fn to_query(&self) -> String {
         let mut query = format!(
             "estimator={}&floor_hz={}&ceiling_hz={}",
-            self.model.as_str(),
+            self.estimator.as_str(),
             self.floor_hz,
             self.ceiling_hz,
         );
@@ -183,7 +182,7 @@ impl EstimateParams {
 
     /// Parse [`Self::to_query`]'s output; the message names the bad field.
     pub fn from_query(query: &str) -> Result<Self, String> {
-        let mut model = None;
+        let mut estimator = None;
         let mut floor_hz = None;
         let mut ceiling_hz = None;
         let mut confidence_threshold = None;
@@ -198,8 +197,8 @@ impl EstimateParams {
             };
             match key {
                 "estimator" => {
-                    model = Some(
-                        Model::parse(value)
+                    estimator = Some(
+                        MlEstimator::parse(value)
                             .ok_or_else(|| format!("unknown estimator `{value}`"))?,
                     );
                 }
@@ -211,7 +210,7 @@ impl EstimateParams {
         }
         let missing = |name: &str| format!("missing parameter `{name}`");
         Ok(Self {
-            model: model.ok_or_else(|| missing("estimator"))?,
+            estimator: estimator.ok_or_else(|| missing("estimator"))?,
             floor_hz: floor_hz.ok_or_else(|| missing("floor_hz"))?,
             ceiling_hz: ceiling_hz.ok_or_else(|| missing("ceiling_hz"))?,
             confidence_threshold,
@@ -239,7 +238,7 @@ mod tests {
     #[test]
     fn estimate_params_survive_the_query_string() {
         let params = EstimateParams {
-            model: Model::SwiftF0,
+            estimator: MlEstimator::SwiftF0,
             floor_hz: 71.0,
             ceiling_hz: 800.5,
             confidence_threshold: Some(0.25),

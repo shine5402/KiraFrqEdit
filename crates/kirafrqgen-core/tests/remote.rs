@@ -91,7 +91,9 @@ fn voicebank(dir: &Path) {
     write_wav(
         dir,
         "sub/vibrato.wav",
-        &phrase(1.0, |t| 330.0 * (1.0 + 0.03 * (t * 5.5 * std::f64::consts::TAU).sin())),
+        &phrase(1.0, |t| {
+            330.0 * (1.0 + 0.03 * (t * 5.5 * std::f64::consts::TAU).sin())
+        }),
     );
     write_wav(dir, "sub/low.wav", &phrase(0.7, |_| 98.0));
     write_wav(dir, "tiny.wav", &[0.1; 200]);

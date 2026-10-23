@@ -774,6 +774,18 @@ pub struct MlServerInfo {
     pub version_warning: Option<String>,
 }
 
+impl MlServerInfo {
+    /// Whether the server can run `estimator`; the DSP estimators never run
+    /// there, so they are always `false`.
+    pub fn available(&self, estimator: Estimator) -> bool {
+        match estimator {
+            Estimator::Rmvpe => self.rmvpe,
+            Estimator::SwiftF0 => self.swiftf0,
+            Estimator::Dio | Estimator::Harvest => false,
+        }
+    }
+}
+
 /// Ask `config`'s ML server what it is and whether it accepts the token. An
 /// unreachable server, a protocol mismatch and a missing or wrong token are
 /// `Err` with the user-facing reason. Blocks for up to a few seconds.

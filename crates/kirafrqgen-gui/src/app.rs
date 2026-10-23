@@ -94,25 +94,19 @@ impl Default for RemoteFields {
 }
 
 impl RemoteFields {
-    /// The ML server these fields name; a bracketed IPv6 host is accepted.
+    /// The ML server these fields name; a bracketed IPv6 host is accepted,
+    /// and the port field always wins.
     fn server(&self) -> Result<MlServer, String> {
-        let host = self.host.trim();
-        let host = host
-            .strip_prefix('[')
-            .and_then(|host| host.strip_suffix(']'))
-            .unwrap_or(host);
-        if host.is_empty() {
+        if self.host.trim().is_empty() {
             return Err("Enter the ML server's host.".to_owned());
-        }
-        if host.chars().any(char::is_whitespace) {
-            return Err(format!("`{host}` is not a host name or address."));
         }
         if self.port == 0 {
             return Err("Enter the ML server's port.".to_owned());
         }
+        let server = MlServer::parse(&self.host)?;
         Ok(MlServer {
-            host: host.to_owned(),
             port: self.port,
+            ..server
         })
     }
 
@@ -232,21 +226,13 @@ enum EstimatorBlock {
 /// The Remote runner's verdict for `estimator`: the DSP estimators always run
 /// here; an ML estimator needs a server that answered and can run it.
 fn remote_block(estimator: Estimator, status: &RemoteStatus) -> Option<EstimatorBlock> {
-    let model = match estimator {
-        Estimator::Dio | Estimator::Harvest => return None,
-        Estimator::Rmvpe => "RMVPE",
-        Estimator::SwiftF0 => "SwiftF0",
-    };
+    if matches!(estimator, Estimator::Dio | Estimator::Harvest) {
+        return None;
+    }
     let reason = match status {
-        RemoteStatus::Ready(info) => {
-            let available = match estimator {
-                Estimator::Rmvpe => info.rmvpe,
-                _ => info.swiftf0,
-            };
-            if available {
-                return None;
-            }
-            format!("The ML server cannot run {model}: its model file is missing there.")
+        RemoteStatus::Ready(info) if info.available(estimator) => return None,
+        RemoteStatus::Ready(_) => {
+            "The ML server cannot run this estimator: its model file is missing there.".to_owned()
         }
         RemoteStatus::Failed(reason) => format!("The ML server is not usable: {reason}"),
         RemoteStatus::Unchecked | RemoteStatus::Checking => "Checking the ML server…".to_owned(),
@@ -816,6 +802,8 @@ impl KiraFrqGenApp {
     /// on Refresh; `Automatic` always stays available when enumeration fails.
     fn advanced_window(&mut self, ctx: &egui::Context) {
         if !self.advanced_open {
+            // A field closed with focus is no longer being edited.
+            self.remote_editing = false;
             return;
         }
         let mut open = self.advanced_open;
@@ -1038,6 +1026,12 @@ impl KiraFrqGenApp {
                     ui.colored_label(ui.visuals().error_fg_color, reason);
                 }
                 None => {}
+            }
+            if self.ml_runner.is_remote()
+                && let RemoteStatus::Ready(info) = &self.remote_status
+                && let Some(warning) = &info.version_warning
+            {
+                ui.colored_label(ui.visuals().warn_fg_color, warning);
             }
 
             ui.add_space(8.0);

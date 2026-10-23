@@ -17,13 +17,14 @@ server's runner, never from the transfer.
 
 ## Considered options
 
-- **16 kHz, 16-bit FLAC (the model rate)** — about a third of the transfer, but lossy:
+- **16 kHz, 16-bit FLAC (the model rate)** — about a third of the transfer (the exact wire is
+  about 700 kbps of PCM per stream before FLAC, small next to compute on a LAN), but lossy:
   resampling to 16 kHz moves samples off the 16-bit grid, and rounding them back is enough to
   flip SwiftF0's voicing at quiet onsets (measured). 24-bit at 16 kHz still flips frames right
   after digital silence. Downsampling or rounding on the wire is rejected; so is any lossy
   codec (Opus).
-- **A pool of parallel model sessions on the server** — rejected: GPU work stays sequential,
-  as in a local run. The server keeps one session per ML estimator, and requests queue on it.
+- **A pool of parallel model sessions on the server** — rejected; the server keeps one session
+  per ML estimator and requests queue on it, as estimates do in a local run.
 
 ## Consequences
 
@@ -35,5 +36,3 @@ server's runner, never from the transfer.
   a change that alters what the server computes for a request bumps the protocol version.
 - A failed request is retried once, then fails that wav. There is never a fallback to local
   estimation, so the user always knows which machine produced a table.
-- Transfer is about 700 kbps of PCM per stream before FLAC (roughly half that after): small
-  next to compute on a LAN.
