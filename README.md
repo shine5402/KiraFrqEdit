@@ -53,11 +53,11 @@ kirafrqgen-cli --serve                  # port 39470; the GPU runner when availa
 kirafrqgen-cli --serve --token secret   # require a token from clients
 ```
 
-It prints the addresses to connect to, its ML runner and its ML estimators, and runs until
-Ctrl-C. If port 39470 is taken it warns and picks another; `--port N` sets one explicitly. On
-macOS the first start asks whether to accept incoming connections; allow it, or clients cannot
-connect. RMVPE needs `rmvpe.onnx` on the server; the server's model files are the ones used,
-not the client's.
+It listens on IPv4 and IPv6, prints the addresses to connect to, its ML runner and its ML
+estimators, and runs until Ctrl-C. If port 39470 is taken (on either family) it warns and picks
+another; `--port N` sets one explicitly. On macOS the first start asks whether to accept incoming
+connections; allow it, or clients cannot connect. RMVPE needs `rmvpe.onnx` on the server; the
+server's model files are the ones used, not the client's.
 
 On the client, choose Remote server in the GUI's Advanced settings (host, port, token, and Test
 connection), or on the CLI:
@@ -65,6 +65,7 @@ connection), or on the CLI:
 ```
 kirafrqgen-cli bank --ml-runner remote --ml-server 192.168.1.20
 kirafrqgen-cli bank --ml-runner remote --ml-server 192.168.1.20:39470 --ml-server-token secret
+kirafrqgen-cli bank --ml-runner remote --ml-server [fd00::20]:39470   # IPv6 in brackets before a port
 ```
 
 Only ML f0 estimation travels: each wav's audio goes to the server unchanged (lossless) and its

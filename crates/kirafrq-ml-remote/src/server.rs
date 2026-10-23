@@ -1,11 +1,12 @@
-//! The ML server (`server` feature): binds the port, loads and warms one
-//! session per available ML estimator, then answers `/v1/info` and
-//! `/v1/estimate` on a few worker threads until stopped. Estimates run on a
-//! session one at a time, as in a local run; concurrent requests queue.
+//! The ML server (`server` feature): binds the port on IPv4 and IPv6, loads
+//! and warms one session per available ML estimator, then answers
+//! `/v1/info` and `/v1/estimate` on a few worker threads until stopped.
+//! Estimates run on a session one at a time, as in a local run; concurrent
+//! requests queue.
 
 use std::fmt;
-use std::io::Read;
-use std::net::{IpAddr, SocketAddr, TcpListener};
+use std::io::{self, Read};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,6 +28,10 @@ const FALLBACK_PORTS: std::ops::RangeInclusive<u16> = DEFAULT_PORT + 1..=DEFAULT
 /// Request threads: enough that `/v1/info` answers while estimates queue.
 const WORKERS: usize = 4;
 
+/// Port-0 attempts at finding a port free on both families: the OS picks the
+/// IPv4 port, which another program may hold on IPv6.
+const FREE_PORT_ATTEMPTS: usize = 8;
+
 /// How often idle worker threads look at the stop flag.
 const POLL: Duration = Duration::from_millis(200);
 
@@ -41,10 +46,28 @@ pub enum Port {
     Explicit(u16),
 }
 
+/// Which interfaces to listen on, on IPv4 and, where the system has it,
+/// IPv6.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Interfaces {
+    /// Every interface (`0.0.0.0` and `::`): what the CLI serves on.
+    All,
+    /// This machine only (`127.0.0.1` and `::1`).
+    Loopback,
+}
+
+impl Interfaces {
+    fn ips(self) -> (Ipv4Addr, Ipv6Addr) {
+        match self {
+            Interfaces::All => (Ipv4Addr::UNSPECIFIED, Ipv6Addr::UNSPECIFIED),
+            Interfaces::Loopback => (Ipv4Addr::LOCALHOST, Ipv6Addr::LOCALHOST),
+        }
+    }
+}
+
 /// Everything the server needs to start.
 pub struct ServerOptions {
-    /// The interface to bind; the CLI binds all of them.
-    pub bind: IpAddr,
+    pub interfaces: Interfaces,
     pub port: Port,
     /// The optional shared token; `None` or empty lets anyone in.
     pub token: Option<String>,
@@ -69,7 +92,7 @@ pub enum ServerError {
     /// The explicitly requested port is taken.
     PortInUse(u16),
     /// Binding failed for another reason.
-    Bind(std::io::Error),
+    Bind(io::Error),
     /// An ML estimator's sessions could not be built or warmed.
     Model {
         estimator: MlEstimator,
@@ -97,8 +120,9 @@ impl std::error::Error for ServerError {}
 
 /// A bound server with its models loaded and warmed, not yet answering.
 pub struct Server {
-    http: tiny_http::Server,
-    address: SocketAddr,
+    /// One per listener: IPv4, then IPv6 where the system has it.
+    http: Vec<tiny_http::Server>,
+    addresses: Vec<SocketAddr>,
     port_warning: Option<String>,
     rmvpe_missing: Option<ModelError>,
     handlers: Arc<Handlers>,
@@ -108,8 +132,12 @@ impl Server {
     /// Bind the port, then build and warm every available ML estimator.
     /// Connections queue until [`Self::spawn`].
     pub fn start(options: ServerOptions) -> Result<Self, ServerError> {
-        let (listener, port_warning) = bind(options.bind, options.port)?;
-        let address = listener.local_addr().map_err(ServerError::Bind)?;
+        let (listeners, port_warning) = bind(options.interfaces, options.port)?;
+        let addresses = listeners
+            .iter()
+            .map(TcpListener::local_addr)
+            .collect::<io::Result<_>>()
+            .map_err(ServerError::Bind)?;
 
         let (rmvpe, rmvpe_missing) = match options.rmvpe {
             Ok(path) => {
@@ -130,11 +158,14 @@ impl Server {
             .map_err(model_error(MlEstimator::SwiftF0))?;
         swiftf0.warm().map_err(model_error(MlEstimator::SwiftF0))?;
 
-        let http = tiny_http::Server::from_listener(listener, None)
-            .map_err(|error| ServerError::Bind(std::io::Error::other(error)))?;
+        let http = listeners
+            .into_iter()
+            .map(|listener| tiny_http::Server::from_listener(listener, None))
+            .collect::<Result<_, _>>()
+            .map_err(|error| ServerError::Bind(io::Error::other(error)))?;
         Ok(Self {
             http,
-            address,
+            addresses,
             port_warning,
             rmvpe_missing,
             handlers: Arc::new(Handlers {
@@ -147,9 +178,10 @@ impl Server {
         })
     }
 
-    /// The bound address (the interface and the port actually bound).
-    pub fn address(&self) -> SocketAddr {
-        self.address
+    /// The bound addresses, one port on every family: IPv4, then IPv6 where
+    /// the system has it.
+    pub fn addresses(&self) -> &[SocketAddr] {
+        &self.addresses
     }
 
     /// The warning for a default port that was taken; `None` when the
@@ -168,13 +200,16 @@ impl Server {
         self.handlers.info(false)
     }
 
-    /// Start answering on background threads; dropping the handle stops them.
+    /// Start answering on background threads, [`WORKERS`] per listener;
+    /// dropping the handle stops them.
     pub fn spawn(self) -> RunningServer {
-        let http = Arc::new(self.http);
         let stop = Arc::new(AtomicBool::new(false));
-        let threads = (0..WORKERS)
-            .map(|_| {
-                let http = Arc::clone(&http);
+        let threads = self
+            .http
+            .into_iter()
+            .map(Arc::new)
+            .flat_map(|http| std::iter::repeat_n(http, WORKERS))
+            .map(|http| {
                 let stop = Arc::clone(&stop);
                 let handlers = Arc::clone(&self.handlers);
                 std::thread::spawn(move || {
@@ -189,7 +224,7 @@ impl Server {
             })
             .collect();
         RunningServer {
-            address: self.address,
+            addresses: self.addresses,
             stop,
             threads,
         }
@@ -199,14 +234,15 @@ impl Server {
 /// A server answering requests; dropping it stops the workers after their
 /// current request.
 pub struct RunningServer {
-    address: SocketAddr,
+    addresses: Vec<SocketAddr>,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
 }
 
 impl RunningServer {
-    pub fn address(&self) -> SocketAddr {
-        self.address
+    /// As [`Server::addresses`].
+    pub fn addresses(&self) -> &[SocketAddr] {
+        &self.addresses
     }
 }
 
@@ -226,13 +262,16 @@ fn model_error(estimator: MlEstimator) -> impl Fn(kirafrq_ml_provider::Error) ->
     }
 }
 
-/// Bind `ip` per the port policy, returning the warning for a taken default.
-fn bind(ip: IpAddr, port: Port) -> Result<(TcpListener, Option<String>), ServerError> {
-    let try_bind = |port: u16| TcpListener::bind(SocketAddr::new(ip, port));
+/// Bind `interfaces` per the port policy, returning the warning for a taken
+/// default.
+fn bind(
+    interfaces: Interfaces,
+    port: Port,
+) -> Result<(Vec<TcpListener>, Option<String>), ServerError> {
     match port {
-        Port::Explicit(port) => match try_bind(port) {
-            Ok(listener) => Ok((listener, None)),
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+        Port::Explicit(port) => match listen(interfaces, port) {
+            Ok(listeners) => Ok((listeners, None)),
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
                 Err(ServerError::PortInUse(port))
             }
             Err(error) => Err(ServerError::Bind(error)),
@@ -242,23 +281,56 @@ fn bind(ip: IpAddr, port: Port) -> Result<(TcpListener, Option<String>), ServerE
                 .chain(FALLBACK_PORTS)
                 .chain([0])
             {
-                match try_bind(candidate) {
-                    Ok(listener) if candidate == DEFAULT_PORT => return Ok((listener, None)),
-                    Ok(listener) => {
-                        let bound = listener.local_addr().map_err(ServerError::Bind)?.port();
+                match listen(interfaces, candidate) {
+                    Ok(listeners) if candidate == DEFAULT_PORT => return Ok((listeners, None)),
+                    Ok(listeners) => {
+                        let bound = listeners[0].local_addr().map_err(ServerError::Bind)?.port();
                         let warning = format!(
                             "the default port {DEFAULT_PORT} is in use; listening on port \
                              {bound} instead"
                         );
-                        return Ok((listener, Some(warning)));
+                        return Ok((listeners, Some(warning)));
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+                    Err(error) if error.kind() == io::ErrorKind::AddrInUse => continue,
                     Err(error) => return Err(ServerError::Bind(error)),
                 }
             }
-            unreachable!("port 0 is never in use")
+            Err(ServerError::Bind(io::ErrorKind::AddrInUse.into()))
         }
     }
+}
+
+/// Listen on `port` on IPv4 and, where the system has it, IPv6; `0` asks the
+/// OS for a port free on both. A port held on either family is in use.
+fn listen(interfaces: Interfaces, port: u16) -> io::Result<Vec<TcpListener>> {
+    let (ipv4, ipv6) = interfaces.ips();
+    for _ in 0..FREE_PORT_ATTEMPTS {
+        let v4 = TcpListener::bind((ipv4, port))?;
+        match listen_ipv6_only(ipv6, v4.local_addr()?.port()) {
+            Ok(v6) => return Ok(vec![v4, v6]),
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse && port == 0 => continue,
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => return Err(error),
+            // No IPv6 on this system: IPv4 alone.
+            Err(_) => return Ok(vec![v4]),
+        }
+    }
+    Err(io::ErrorKind::AddrInUse.into())
+}
+
+/// An IPv6-only listener beside the IPv4 one, not one dual-stack socket: on
+/// macOS a dual-stack socket binds even over a port another program holds on
+/// IPv4, which would hide that the port is taken.
+fn listen_ipv6_only(ip: Ipv6Addr, port: u16) -> io::Result<TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_only_v6(true)?;
+    // As `TcpListener::bind` does on Unix, so a restart can rebind at once.
+    #[cfg(unix)]
+    socket.set_reuse_address(true)?;
+    socket.bind(&SocketAddr::new(IpAddr::V6(ip), port).into())?;
+    socket.listen(128)?;
+    Ok(socket.into())
 }
 
 /// The request handlers and the ML estimators behind them.

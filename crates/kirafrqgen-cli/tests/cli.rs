@@ -1020,7 +1020,9 @@ fn serve_reports_its_address_runner_estimators_and_token() {
     }
     let server = Serve::start(&["--port", "0", "--ml-runner", "cpu"], &[]);
     assert!(server.port() != 0);
-    assert!(server.line("Listening on").contains("0.0.0.0"));
+    let listening = server.line("Listening on");
+    assert!(listening.contains("0.0.0.0:"), "{listening}");
+    assert!(listening.contains("[::]:"), "both families: {listening}");
     assert!(
         server.line("ML runner:").contains("CPU"),
         "{:?}",
@@ -1047,6 +1049,26 @@ fn serve_reports_its_address_runner_estimators_and_token() {
     assert!(!server.line("Token:").contains("not required"));
 }
 
+/// Bind `address`, retrying for a moment: on macOS std marks a new socket
+/// close-on-exec only after creating it, so a CLI child a concurrent test
+/// spawns in between inherits it and keeps a just-dropped port bound until
+/// it exits.
+fn hold(address: &str) -> std::net::TcpListener {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match std::net::TcpListener::bind(address) {
+            Ok(listener) => return listener,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AddrInUse
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => panic!("cannot hold {address}: {error}"),
+        }
+    }
+}
+
 #[test]
 fn serve_takes_the_default_port_and_warns_when_it_is_held() {
     if !cfg!(feature = "ml") {
@@ -1057,7 +1079,15 @@ fn serve_takes_the_default_port_and_warns_when_it_is_held() {
     assert_eq!(server.port(), 39470, "{:?}", server.stdout);
     server.stop();
 
-    let held = std::net::TcpListener::bind("0.0.0.0:39470").unwrap();
+    // Held on IPv6 alone (Windows), or on both (a dual-stack socket on
+    // macOS and Linux): either way the default port is taken.
+    let held_v6 = hold("[::]:39470");
+    let server = Serve::start(&["--ml-runner", "cpu"], &[]);
+    assert_ne!(server.port(), 39470, "{:?}", server.stdout);
+    server.stop();
+    drop(held_v6);
+
+    let held = hold("0.0.0.0:39470");
     let server = Serve::start(&["--ml-runner", "cpu"], &[]);
     let port = server.port();
     assert_ne!(port, 39470);

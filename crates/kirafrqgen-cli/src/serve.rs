@@ -3,13 +3,13 @@
 //! The startup report goes to stdout, one fact per line; warnings (a taken
 //! default port, RMVPE's missing model) go to stderr like a run's.
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use kirafrq_ml_provider::{Runner, SessionConfig};
-use kirafrq_ml_remote::server::{Port, Server, ServerOptions};
+use kirafrq_ml_remote::server::{Interfaces, Port, Server, ServerOptions};
 use kirafrqgen_core::{ML_DOWNLOAD_HINT, MlRunner};
 
 use crate::args::Cli;
@@ -45,7 +45,7 @@ pub fn run(cli: &Cli) -> u8 {
     );
 
     let server = match Server::start(ServerOptions {
-        bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        interfaces: Interfaces::All,
         port: cli.port.map_or(Port::Default, Port::Explicit),
         token: cli.token.clone(),
         session_config,
@@ -69,19 +69,24 @@ pub fn run(cli: &Cli) -> u8 {
     }
 
     let info = server.info();
-    let address = server.address();
+    let addresses = server.addresses();
+    let port = addresses[0].port();
     let lan: Vec<String> = lan_addresses()
         .into_iter()
-        .map(|ip| format!("{ip}:{}", address.port()))
+        .map(|ip| SocketAddr::new(ip, port).to_string())
         .collect();
 
     println!("KiraFrqGen {} ML server", info.version);
-    println!("Listening on {address}");
+    println!(
+        "Listening on {}",
+        addresses
+            .iter()
+            .map(SocketAddr::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     if lan.is_empty() {
-        println!(
-            "Connect to: this machine's IP address, port {}",
-            address.port()
-        );
+        println!("Connect to: this machine's IP address, port {port}");
     } else {
         println!("Connect to: {}", lan.join(", "));
     }
@@ -135,15 +140,16 @@ fn device_label(runner: MlRunner, directml_device: Option<u32>) -> String {
     }
 }
 
-/// This machine's non-loopback IPv4 addresses: what a client types.
-fn lan_addresses() -> Vec<Ipv4Addr> {
-    let mut addresses: Vec<Ipv4Addr> = if_addrs::get_if_addrs()
+/// This machine's addresses a client can type: IPv4, then IPv6, without
+/// loopback and link-local ones (an IPv6 link-local address needs a zone).
+fn lan_addresses() -> Vec<IpAddr> {
+    let mut addresses: Vec<IpAddr> = if_addrs::get_if_addrs()
         .unwrap_or_default()
         .into_iter()
-        .filter(|interface| !interface.is_loopback())
-        .filter_map(|interface| match interface.ip() {
-            IpAddr::V4(ip) if !ip.is_link_local() => Some(ip),
-            _ => None,
+        .map(|interface| interface.ip())
+        .filter(|ip| match ip {
+            IpAddr::V4(ip) => !ip.is_loopback() && !ip.is_link_local(),
+            IpAddr::V6(ip) => !ip.is_loopback() && !ip.is_unicast_link_local(),
         })
         .collect();
     addresses.sort();

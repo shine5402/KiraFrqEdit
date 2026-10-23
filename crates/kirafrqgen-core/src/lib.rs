@@ -150,7 +150,7 @@ pub struct MlServer {
 
 impl MlServer {
     /// Parse `HOST[:PORT]`; the port defaults to [`ML_SERVER_DEFAULT_PORT`].
-    /// An IPv6 host goes in brackets when a port follows (`[fe80::1]:39470`);
+    /// An IPv6 host goes in brackets when a port follows (`[fd00::20]:39470`);
     /// a bare IPv6 address takes the default port.
     pub fn parse(value: &str) -> Result<Self, String> {
         let value = value.trim();

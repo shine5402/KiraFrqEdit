@@ -7,7 +7,7 @@
 #![cfg(feature = "ml")]
 
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,7 +16,7 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use kirafrq_formats::frq;
 use kirafrq_ml_provider::model::ModelError;
 use kirafrq_ml_provider::swiftf0::resolve_source;
-use kirafrq_ml_remote::server::{Port, RunningServer, Server, ServerOptions};
+use kirafrq_ml_remote::server::{Interfaces, Port, RunningServer, Server, ServerOptions};
 use kirafrq_ml_remote::{Estimators, Info, PROTOCOL_VERSION, VERSION};
 use kirafrqgen_core::{
     CancelToken, Estimator, F0Config, GenerateOptions, GeneratorError, MlConfig, MlRunner,
@@ -139,7 +139,7 @@ fn no_rmvpe() -> Result<PathBuf, ModelError> {
 /// A real ML server with SwiftF0 only, on a free localhost port.
 fn server(token: Option<&str>) -> RunningServer {
     Server::start(ServerOptions {
-        bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
+        interfaces: Interfaces::Loopback,
         port: Port::Explicit(0),
         token: token.map(str::to_string),
         session_config: Default::default(),
@@ -153,6 +153,15 @@ fn server(token: Option<&str>) -> RunningServer {
     })
     .unwrap()
     .spawn()
+}
+
+/// The server's IPv4 loopback address.
+fn ipv4(server: &RunningServer) -> SocketAddr {
+    *server
+        .addresses()
+        .iter()
+        .find(|address| address.is_ipv4())
+        .expect("an IPv4 listener")
 }
 
 fn remote(address: SocketAddr, token: Option<&str>) -> MlConfig {
@@ -261,7 +270,7 @@ fn remote_swiftf0_tables_equal_a_local_run() {
 
     let local = run(&options(&local_dir.0, MlConfig::default())).unwrap();
     let server = server(None);
-    let remote = run(&options(&remote_dir.0, remote(server.address(), None))).unwrap();
+    let remote = run(&options(&remote_dir.0, remote(ipv4(&server), None))).unwrap();
     assert!(local.failed.is_empty(), "{:?}", local.failed);
     assert!(remote.failed.is_empty(), "{:?}", remote.failed);
     assert_eq!(remote.written, local.written);
@@ -275,6 +284,24 @@ fn remote_swiftf0_tables_equal_a_local_run() {
         );
         assert_eq!(table(&remote_dir.0), local, "{name}");
     }
+}
+
+#[test]
+fn the_server_answers_over_ipv4_and_ipv6_on_one_port() {
+    let server = server(None);
+    let ipv4 = ipv4(&server);
+    let ipv6 = *server
+        .addresses()
+        .iter()
+        .find(|address| address.is_ipv6())
+        .expect("an IPv6 listener");
+    assert_eq!(ipv6.port(), ipv4.port());
+    assert!(ipv6.ip().is_loopback(), "{ipv6}");
+
+    let dir = Scratch::new("ipv6");
+    write_wav(&dir.0, "a.wav", &short_wav());
+    let summary = run(&options(&dir.0, remote(ipv6, None))).unwrap();
+    assert_eq!(summary.written, 1, "{:?}", summary.failed);
 }
 
 #[test]
@@ -343,7 +370,7 @@ fn a_differing_version_under_the_same_protocol_still_runs() {
 fn an_estimator_the_server_cannot_run_is_a_configuration_error() {
     let server = server(None);
     let dir = Scratch::new("unavailable");
-    let mut opts = options(&dir.0, remote(server.address(), None));
+    let mut opts = options(&dir.0, remote(ipv4(&server), None));
     opts.f0.estimator = Estimator::Rmvpe;
     let message = config_error(&opts);
     assert!(message.contains("cannot run RMVPE"), "{message}");
@@ -353,13 +380,13 @@ fn an_estimator_the_server_cannot_run_is_a_configuration_error() {
 fn a_missing_or_wrong_token_is_a_configuration_error() {
     let server = server(Some("open sesame"));
     let dir = Scratch::new("token");
-    let message = config_error(&options(&dir.0, remote(server.address(), None)));
+    let message = config_error(&options(&dir.0, remote(ipv4(&server), None)));
     assert!(message.contains("requires a token"), "{message}");
-    let message = config_error(&options(&dir.0, remote(server.address(), Some("nope"))));
+    let message = config_error(&options(&dir.0, remote(ipv4(&server), Some("nope"))));
     assert!(message.contains("rejected the token"), "{message}");
 
     write_wav(&dir.0, "a.wav", &short_wav());
-    let opts = options(&dir.0, remote(server.address(), Some("open sesame")));
+    let opts = options(&dir.0, remote(ipv4(&server), Some("open sesame")));
     assert_eq!(run(&opts).unwrap().written, 1);
 }
 
