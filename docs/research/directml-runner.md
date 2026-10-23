@@ -145,7 +145,7 @@ around the `privateuseone` branch).
 
 ## Empirical verification (local Windows machine, 2026-10)
 
-The `directml_probe` example added alongside this note loaded the real RMVPE
+The `runner_probe` example loaded the real RMVPE
 model (362 MB, local scratch) and the bundled SwiftF0 over the same synthetic
 audio under the CPU and DirectML runners (plus the strict mode during the
 probe, before it was dropped), on an integrated DirectX 12 GPU:
