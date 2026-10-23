@@ -41,13 +41,21 @@ while SwiftF0's is shaped by the energy voicing gate. _Avoid_: calling it a "res
 
 ## ML runner
 
-Which ONNX Runtime execution provider runs the ML estimators: CPU (every build), DirectML
-(Windows ML builds: a DirectX 12 GPU, selectable by DXGI adapter index, or automatic) or Core ML
-(Apple-silicon macOS ML builds: the Mac's GPU). The default is the platform's GPU runner when it is
-usable, else CPU. ONNX Runtime keeps its CPU execution provider alongside the GPU runners, so
-operations they do not take run on the CPU. GUI: hamburger menu > Advanced settings; CLI:
-`--ml-runner`. _Avoid_:
-"backend" or "provider" alone for this setting.
+Where the ML estimators run: CPU (every build), DirectML (Windows ML builds: a DirectX 12 GPU,
+selectable by DXGI adapter index, or automatic), Core ML (Apple-silicon macOS ML builds: the
+Mac's GPU), or Remote (an **ML server**, on whatever runner the server uses). The default is the
+platform's GPU runner when it is usable, else CPU; Remote is only ever chosen explicitly. ONNX
+Runtime keeps its CPU execution provider alongside the GPU runners, so operations they do not
+take run on the CPU. The DSP estimators always run locally, whatever the runner. GUI: hamburger
+menu > Advanced settings; CLI: `--ml-runner`. _Avoid_: "backend" or "provider" alone for this
+setting.
+
+## ML server
+
+A KiraFrqGen CLI in serve mode (`kirafrqgen-cli --serve`) that runs the ML estimators for other
+KiraFrqGen instances on the network. It holds no voicebank state: a client sends one wav's
+decoded audio, exactly, and gets back its f0 on the table grid; everything else stays on the
+client. Its own model files are the ones used. _Avoid_: "remote backend", "worker".
 
 ## Model file
 

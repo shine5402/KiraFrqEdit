@@ -39,7 +39,8 @@ outputs wrong pitch, glitches and pops.
 - `crates/` — the Cargo workspace: `kirafrq-formats` (neutral `FrequencyTable` + frq/pmk/mrq IO),
   `kirafrq-audio` (WAV decode and mono 44.1 kHz normalization), `kirafrq-world-binding` (vendored
   WORLD wrapper), `kirafrq-ml-provider` (model-free resample/grid layer + RMVPE and SwiftF0 over
-  ONNX Runtime), `kirafrq-credits` (the `CREDITS.md` document the binaries show), `kirafrqgen-core`
+  ONNX Runtime), `kirafrq-ml-remote` (the ML server: wire protocol, client, and the server
+  behind its `server` feature), `kirafrq-credits` (the `CREDITS.md` document the binaries show), `kirafrqgen-core`
   (generation pipeline), `kirafrqgen-cli` / `kirafrqgen-gui` (the CLI and GUI binaries).
 - `xtask/` — repo maintenance binary; `cargo xtask credits` regenerates the dependency notices in
   `CREDITS.md` from `about.toml`.
