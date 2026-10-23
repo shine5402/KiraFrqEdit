@@ -2,7 +2,7 @@
 //! and warms one session per available ML estimator, then answers
 //! `/v1/info` and `/v1/estimate` on a few worker threads until stopped.
 //! Estimates run on a session one at a time, as in a local run; concurrent
-//! requests queue.
+//! requests queue. Every answered request is one line to the optional log.
 
 use std::fmt;
 use std::io::{self, Read};
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kirafrq_ml_provider::rmvpe::Rmvpe;
 use kirafrq_ml_provider::swiftf0::SwiftF0;
@@ -84,6 +84,8 @@ pub struct ServerOptions {
     pub rmvpe: Result<PathBuf, ModelError>,
     /// SwiftF0's model: the on-disk override or the bundled one.
     pub swiftf0: ModelSource,
+    /// Where each answered request's line goes; `None` keeps quiet.
+    pub log: Option<fn(&str)>,
 }
 
 /// Why the server could not start.
@@ -174,6 +176,7 @@ impl Server {
                 device_label: options.device_label,
                 rmvpe,
                 swiftf0,
+                log: options.log,
             }),
         })
     }
@@ -340,6 +343,7 @@ struct Handlers {
     device_label: String,
     rmvpe: Option<Rmvpe>,
     swiftf0: SwiftF0,
+    log: Option<fn(&str)>,
 }
 
 /// A response: status and JSON body.
@@ -362,19 +366,42 @@ impl Handlers {
     }
 
     fn handle(&self, mut request: tiny_http::Request) {
+        let started = Instant::now();
         let url = request.url().to_string();
         let (path, query) = url.split_once('?').unwrap_or((&url, ""));
-        let (status, body) = match (request.method(), path) {
+        let method = request.method().clone();
+        let mut detail = None;
+        let (status, body) = match (&method, path) {
             (tiny_http::Method::Get, "/v1/info") => {
                 let authorized = self.authorized(&request);
                 json(200, &self.info(authorized))
             }
-            (tiny_http::Method::Post, "/v1/estimate") => self
-                .estimate(&mut request, query)
-                .unwrap_or_else(|reply| reply),
+            (tiny_http::Method::Post, "/v1/estimate") => match self.estimate(&mut request, query) {
+                Ok((reply, what)) => {
+                    detail = Some(what);
+                    reply
+                }
+                Err(reply) => reply,
+            },
             (_, "/v1/info" | "/v1/estimate") => error(405, "method not allowed"),
             _ => error(404, &format!("no such endpoint: {path}")),
         };
+        if let Some(log) = self.log {
+            let peer = request
+                .remote_addr()
+                .map_or_else(|| "?".to_string(), |address| address.ip().to_string());
+            let mut line = format!(
+                "{peer} {method} {path} -> {status} in {:.2} s",
+                started.elapsed().as_secs_f64()
+            );
+            if let Some(detail) = detail {
+                line.push_str(&format!(" ({detail})"));
+            }
+            if let Ok(ErrorBody { error }) = serde_json::from_str(&body) {
+                line.push_str(&format!(": {error}"));
+            }
+            log(&line);
+        }
         let response = tiny_http::Response::from_string(body)
             .with_status_code(status)
             .with_header(
@@ -396,7 +423,12 @@ impl Handlers {
         })
     }
 
-    fn estimate(&self, request: &mut tiny_http::Request, query: &str) -> Result<Reply, Reply> {
+    /// The reply and, for the log, what was estimated.
+    fn estimate(
+        &self,
+        request: &mut tiny_http::Request,
+        query: &str,
+    ) -> Result<(Reply, String), Reply> {
         if !self.authorized(request) {
             return Err(error(401, "this ML server requires a valid token"));
         }
@@ -445,7 +477,12 @@ impl Handlers {
             }
         }
         .map_err(|failure| error(500, &format!("inference failed: {failure}")))?;
-        Ok(json(200, &Estimate { f0_hz: track.f0_hz }))
+        let what = format!(
+            "{}, {:.2} s of audio",
+            params.estimator.name(),
+            samples.len() as f64 / f64::from(crate::SAMPLE_RATE)
+        );
+        Ok((json(200, &Estimate { f0_hz: track.f0_hz }), what))
     }
 }
 

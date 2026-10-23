@@ -8,7 +8,8 @@ use std::time::Duration;
 use kirafrq_ml_provider::grid::{TABLE_HOP_SAMPLES, table_frame_count};
 
 use crate::{
-    ErrorBody, Estimate, EstimateParams, Info, MAX_BODY_BYTES, MlEstimator, PROTOCOL_VERSION, audio,
+    ErrorBody, Estimate, EstimateParams, Info, MAX_BODY_BYTES, MlEstimator, PROTOCOL_VERSION,
+    VERSION, audio,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -45,8 +46,8 @@ impl fmt::Display for ClientError {
             }
             ClientError::Protocol { address, reason } => write!(
                 f,
-                "{address} is not a compatible ML server ({reason}); run the same KiraFrqGen \
-                 release on both machines"
+                "{address} is not a compatible ML server ({reason}); both machines need \
+                 KiraFrqGen releases that speak the same ML server protocol"
             ),
             ClientError::TokenRequired => {
                 write!(f, "the ML server requires a token; set the server's token")
@@ -132,17 +133,18 @@ impl Client {
         let info: Info = serde_json::from_str(&body)
             .map_err(|error| self.protocol(format!("unreadable /v1/info: {error}")))?;
         if info.protocol != PROTOCOL_VERSION {
+            // The releases only hint at which side to update.
             return Err(self.protocol(format!(
-                "it speaks protocol {}, this build speaks {PROTOCOL_VERSION}",
-                info.protocol
+                "it speaks protocol {} (KiraFrqGen {}), this build speaks {PROTOCOL_VERSION} \
+                 (KiraFrqGen {VERSION})",
+                info.protocol, info.version
             )));
         }
         Ok(info)
     }
 
     /// The configuration check before a run: the server answers this
-    /// protocol, accepts the token and can run `model`. A differing
-    /// KiraFrqGen version is left to [`Info::version_warning`].
+    /// protocol, accepts the token and can run `model`.
     pub fn check(&self, estimator: MlEstimator) -> Result<Info, ClientError> {
         let info = self.check_access()?;
         if !info.available(estimator) {

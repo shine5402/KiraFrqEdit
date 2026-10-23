@@ -410,6 +410,13 @@ pub trait F0Estimator: Send + Sync {
         false
     }
 
+    /// Whether the run must process one wav at a time whatever `jobs` says.
+    /// The remote runner opts in: the server runs one estimate at a time
+    /// anyway, and wavs queued behind it would only stall cancellation.
+    fn serial(&self) -> bool {
+        false
+    }
+
     /// The raw D4C LoveTrain aperiodicity statistic per frame, for the tuned
     /// WORLD path's aperiodicity gate (#64). `Ok(None)` means the estimator
     /// has no such statistic (the ML tier, or a WORLD estimator that does not
@@ -769,9 +776,6 @@ pub struct MlServerInfo {
     pub rmvpe: bool,
     /// The server can run SwiftF0.
     pub swiftf0: bool,
-    /// The server runs another KiraFrqGen version under the same protocol;
-    /// a warning, not an error.
-    pub version_warning: Option<String>,
 }
 
 impl MlServerInfo {

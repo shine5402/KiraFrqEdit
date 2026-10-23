@@ -32,7 +32,8 @@ server's runner, never from the transfer.
   and its default confidence threshold. A client's local model override does not apply to
   remote runs.
 - Compatibility is the protocol version (`/v1`, reported by `GET /v1/info`): a mismatch stops
-  the run before any file. A different KiraFrqGen version under the same protocol only warns, so
-  a change that alters what the server computes for a request bumps the protocol version.
+  the run before any file. The KiraFrqGen version never enters the check, not even as a warning;
+  it only names the releases in a mismatch error. So a change that alters what the server
+  computes for a request bumps the protocol version.
 - A failed request is retried once, then fails that wav. There is never a fallback to local
   estimation, so the user always knows which machine produced a table.

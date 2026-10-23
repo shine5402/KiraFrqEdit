@@ -31,7 +31,6 @@ pub(crate) fn server_info(config: &MlConfig) -> Result<MlServerInfo, String> {
         summary: info.summary(),
         rmvpe: info.available(MlEstimator::Rmvpe),
         swiftf0: info.available(MlEstimator::SwiftF0),
-        version_warning: info.version_warning(),
     })
 }
 
@@ -98,5 +97,9 @@ impl F0Estimator for RemoteEstimator {
                 .collect(),
             f0_hz,
         })
+    }
+
+    fn serial(&self) -> bool {
+        true
     }
 }

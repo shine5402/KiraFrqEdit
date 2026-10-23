@@ -778,9 +778,6 @@ impl KiraFrqGenApp {
         match &self.remote_status {
             RemoteStatus::Ready(info) => {
                 ui.label(format!("{} Connected: {}", icons::CHECK, info.summary));
-                if let Some(warning) = &info.version_warning {
-                    ui.colored_label(ui.visuals().warn_fg_color, warning);
-                }
             }
             RemoteStatus::Failed(reason) => {
                 ui.colored_label(ui.visuals().error_fg_color, reason);
@@ -1027,13 +1024,6 @@ impl KiraFrqGenApp {
                 }
                 None => {}
             }
-            if self.ml_runner.is_remote()
-                && let RemoteStatus::Ready(info) = &self.remote_status
-                && let Some(warning) = &info.version_warning
-            {
-                ui.colored_label(ui.visuals().warn_fg_color, warning);
-            }
-
             ui.add_space(8.0);
             ui.checkbox(&mut self.recommended_tuning, "Apply recommended tuning");
             ui.add(egui::Label::new(RichText::new(RECOMMENDED_TUNING_LABEL).weak()).wrap());
