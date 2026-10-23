@@ -2083,7 +2083,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kirafrq-audio"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "hound",
  "rubato",
@@ -2091,18 +2091,18 @@ dependencies = [
 
 [[package]]
 name = "kirafrq-credits"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "kirafrq-formats"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "encoding_rs",
 ]
 
 [[package]]
 name = "kirafrq-ml-provider"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "kirafrq-audio",
  "ort",
@@ -2114,7 +2114,7 @@ dependencies = [
 
 [[package]]
 name = "kirafrq-ml-remote"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "claxon",
  "flacenc",
@@ -2128,7 +2128,7 @@ dependencies = [
 
 [[package]]
 name = "kirafrq-world-binding"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cc",
  "hound",
@@ -2136,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "kirafrqgen-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "ctrlc",
@@ -2151,7 +2151,7 @@ dependencies = [
 
 [[package]]
 name = "kirafrqgen-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "hound",
  "kirafrq-audio",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "kirafrqgen-gui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arboard",
  "eframe",
@@ -5091,7 +5091,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "kirafrq-credits",
 ]
