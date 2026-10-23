@@ -29,9 +29,10 @@ pub struct Cli {
     #[arg(long, value_enum)]
     pub estimator: Option<EstimatorArg>,
 
-    /// ML execution provider for RMVPE and SwiftF0: `cpu` or `directml`
-    /// (Windows, DirectX 12 GPU). DirectML when this machine can use it,
-    /// else CPU.
+    /// ML execution provider for RMVPE and SwiftF0: `cpu` everywhere,
+    /// `directml` on Windows (DirectX 12 GPU), `coreml` on Apple-silicon
+    /// Macs. Defaults to the platform's GPU runner when this machine can use
+    /// it, else CPU.
     #[cfg(feature = "ml")]
     #[arg(long, value_enum, value_name = "RUNNER")]
     pub ml_runner: Option<MlRunnerArg>,
@@ -123,7 +124,7 @@ impl Cli {
         #[cfg(feature = "ml")]
         {
             config.ml.runner = self.ml_runner.map_or_else(
-                || kirafrqgen_core::default_ml_runner(kirafrqgen_core::directml_usable()),
+                || kirafrqgen_core::default_ml_runner(kirafrqgen_core::ml_runner_usable),
                 MlRunner::from,
             );
             if config.ml.runner.is_directml() {
@@ -242,18 +243,20 @@ impl From<EstimatorArg> for Estimator {
 pub enum MlRunnerArg {
     Cpu,
     DirectMl,
+    CoreMl,
 }
 
 #[cfg(feature = "ml")]
 impl clap::ValueEnum for MlRunnerArg {
     fn value_variants<'a>() -> &'a [Self] {
-        &[Self::Cpu, Self::DirectMl]
+        &[Self::Cpu, Self::DirectMl, Self::CoreMl]
     }
 
     fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
         let name = match self {
             MlRunnerArg::Cpu => "cpu",
             MlRunnerArg::DirectMl => "directml",
+            MlRunnerArg::CoreMl => "coreml",
         };
         let runner = MlRunner::from(*self);
         Some(clap::builder::PossibleValue::new(name).help(runner.description()))
@@ -266,6 +269,7 @@ impl From<MlRunnerArg> for MlRunner {
         match value {
             MlRunnerArg::Cpu => MlRunner::Cpu,
             MlRunnerArg::DirectMl => MlRunner::DirectMl,
+            MlRunnerArg::CoreMl => MlRunner::CoreMl,
         }
     }
 }
@@ -407,17 +411,23 @@ mod tests {
 
     #[cfg(feature = "ml")]
     #[test]
-    fn ml_runner_defaults_to_directml_when_usable_and_accepts_every_name() {
+    fn ml_runner_defaults_to_the_usable_gpu_runner_and_accepts_every_name() {
         let plain = parse_ok(&["bank"]).f0_config();
         let expected = if kirafrqgen_core::directml_usable() {
             MlRunner::DirectMl
+        } else if kirafrqgen_core::coreml_usable() {
+            MlRunner::CoreMl
         } else {
             MlRunner::Cpu
         };
         assert_eq!(plain.ml.runner, expected);
         assert_eq!(plain.ml.directml_device, None);
 
-        for (name, runner) in [("cpu", MlRunner::Cpu), ("directml", MlRunner::DirectMl)] {
+        for (name, runner) in [
+            ("cpu", MlRunner::Cpu),
+            ("directml", MlRunner::DirectMl),
+            ("coreml", MlRunner::CoreMl),
+        ] {
             assert_eq!(
                 parse_ok(&["bank", "--ml-runner", name])
                     .f0_config()

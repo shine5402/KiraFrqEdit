@@ -91,15 +91,17 @@ pub fn default_estimator(rmvpe_available: bool) -> Estimator {
 
 /// Which runtime the ML estimators (RMVPE, SwiftF0) run on.
 ///
-/// Data-only, like [`Estimator`]: the compat build compiles the DirectML
-/// variant and rejects it at [`build_estimator`] time.
+/// Data-only, like [`Estimator`]: every build compiles every variant, and a
+/// runner the platform lacks is rejected at [`build_estimator`] time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MlRunner {
-    /// ONNX Runtime's CPU path; the fallback wherever DirectML cannot run.
+    /// ONNX Runtime's CPU path; the fallback wherever no GPU runner can run.
     #[default]
     Cpu,
     /// DirectML (Windows): a DirectX 12 GPU.
     DirectMl,
+    /// Core ML (Apple-silicon Mac): the Mac's GPU (#84).
+    CoreMl,
 }
 
 impl MlRunner {
@@ -108,6 +110,7 @@ impl MlRunner {
         match self {
             MlRunner::Cpu => "Runs the ML estimators on the processor.",
             MlRunner::DirectMl => "Runs the ML estimators on a DirectX 12 GPU.",
+            MlRunner::CoreMl => "Runs the ML estimators on the Mac's GPU through Core ML.",
         }
     }
 
@@ -143,6 +146,13 @@ pub struct MlConfig {
 pub const DIRECTML_SUPPORTED: bool = kirafrq_ml_provider::DIRECTML_SUPPORTED;
 #[cfg(not(feature = "ml"))]
 pub const DIRECTML_SUPPORTED: bool = false;
+
+/// Whether this build can offer the Core ML runner at all (Apple-silicon
+/// macOS `ml` builds).
+#[cfg(feature = "ml")]
+pub const COREML_SUPPORTED: bool = kirafrq_ml_provider::COREML_SUPPORTED;
+#[cfg(not(feature = "ml"))]
+pub const COREML_SUPPORTED: bool = false;
 
 /// One DirectML adapter the runner can target.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,17 +205,39 @@ pub fn directml_usable() -> bool {
     DIRECTML_SUPPORTED && ml_devices().is_ok_and(|devices| !devices.is_empty())
 }
 
-/// The capability-aware ML runner default: DirectML when [`directml_usable`],
-/// else CPU. The front ends resolve this once at startup; an explicit choice
-/// always wins.
-///
-/// `directml_available` is [`directml_usable`]'s result.
-pub fn default_ml_runner(directml_available: bool) -> MlRunner {
-    if directml_available {
-        MlRunner::DirectMl
-    } else {
-        MlRunner::Cpu
+/// Whether the Core ML runner can run here: an Apple-silicon macOS ML build
+/// where a Core ML session commits. The probe builds a small session once per
+/// process.
+pub fn coreml_usable() -> bool {
+    #[cfg(feature = "ml")]
+    {
+        kirafrq_ml_provider::coreml_usable()
     }
+    #[cfg(not(feature = "ml"))]
+    {
+        false
+    }
+}
+
+/// Whether `runner` can run here: CPU in every ML build, the GPU runners per
+/// [`directml_usable`] and [`coreml_usable`].
+pub fn ml_runner_usable(runner: MlRunner) -> bool {
+    match runner {
+        MlRunner::Cpu => ML_SUPPORTED,
+        MlRunner::DirectMl => directml_usable(),
+        MlRunner::CoreMl => coreml_usable(),
+    }
+}
+
+/// The capability-aware ML runner default: the platform's GPU runner
+/// (DirectML on Windows, Core ML on Apple silicon) when `usable`, else CPU.
+/// The front ends resolve this once at startup, passing
+/// [`ml_runner_usable`]; an explicit choice always wins.
+pub fn default_ml_runner(usable: impl Fn(MlRunner) -> bool) -> MlRunner {
+    [MlRunner::DirectMl, MlRunner::CoreMl]
+        .into_iter()
+        .find(|&runner| usable(runner))
+        .unwrap_or(MlRunner::Cpu)
 }
 
 /// f0 estimation settings shared by every wav in a run.
@@ -524,6 +556,7 @@ fn ml_session(config: &F0Config) -> kirafrq_ml_provider::SessionConfig {
         runner: match config.ml.runner {
             MlRunner::Cpu => kirafrq_ml_provider::Runner::Cpu,
             MlRunner::DirectMl => kirafrq_ml_provider::Runner::DirectMl,
+            MlRunner::CoreMl => kirafrq_ml_provider::Runner::CoreMl,
         },
         directml_device: config.ml.directml_device,
     }
@@ -887,15 +920,33 @@ mod tests {
 
     #[test]
     fn every_ml_runner_has_a_description() {
-        for runner in [MlRunner::Cpu, MlRunner::DirectMl] {
+        for runner in [MlRunner::Cpu, MlRunner::DirectMl, MlRunner::CoreMl] {
             assert!(!runner.description().is_empty());
         }
     }
 
     #[test]
-    fn the_ml_runner_default_prefers_directml_when_usable() {
-        assert_eq!(default_ml_runner(true), MlRunner::DirectMl);
-        assert_eq!(default_ml_runner(false), MlRunner::Cpu);
+    fn the_ml_runner_default_prefers_the_usable_gpu_runner() {
+        assert_eq!(
+            default_ml_runner(|runner| runner == MlRunner::DirectMl),
+            MlRunner::DirectMl
+        );
+        assert_eq!(
+            default_ml_runner(|runner| runner == MlRunner::CoreMl),
+            MlRunner::CoreMl
+        );
+        assert_eq!(default_ml_runner(|_| false), MlRunner::Cpu);
+    }
+
+    #[test]
+    fn only_the_platform_gpu_runner_can_be_usable() {
+        assert!(ml_runner_usable(MlRunner::Cpu) == ML_SUPPORTED);
+        if !DIRECTML_SUPPORTED {
+            assert!(!ml_runner_usable(MlRunner::DirectMl));
+        }
+        if !COREML_SUPPORTED {
+            assert!(!ml_runner_usable(MlRunner::CoreMl));
+        }
     }
 
     #[test]
@@ -917,6 +968,7 @@ mod tests {
     fn only_directml_uses_a_device() {
         assert!(!MlRunner::Cpu.is_directml());
         assert!(MlRunner::DirectMl.is_directml());
+        assert!(!MlRunner::CoreMl.is_directml());
     }
 
     #[cfg(feature = "ml")]
@@ -942,6 +994,17 @@ mod tests {
                 runner: kirafrq_ml_provider::Runner::DirectMl,
                 directml_device: Some(2),
             }
+        );
+        let config = F0Config {
+            ml: MlConfig {
+                runner: MlRunner::CoreMl,
+                ..MlConfig::default()
+            },
+            ..F0Config::default()
+        };
+        assert_eq!(
+            ml_session(&config).runner,
+            kirafrq_ml_provider::Runner::CoreMl
         );
     }
 

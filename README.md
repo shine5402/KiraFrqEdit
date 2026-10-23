@@ -22,22 +22,26 @@ SwiftF0 ships with its model (MIT) bundled, so it works with no download. An on-
 license for the bundled model is next to it at
 [`crates/kirafrq-ml-provider/assets/swiftf0.LICENSE`](crates/kirafrq-ml-provider/assets/swiftf0.LICENSE).
 
-## GPU runner (Windows)
+## GPU runner
 
-The ML estimators run on a DirectX 12 GPU through DirectML when the machine has one; the
-CPU is the fallback. The GUI's Advanced settings (hamburger menu) pick the runner and
-adapter, and remember the choice across restarts. On the CLI:
+The ML estimators run on the GPU when the machine has a usable one, through DirectML on
+Windows (a DirectX 12 GPU) or Core ML on Apple-silicon Macs; the CPU is the fallback. The GUI's
+Advanced settings (hamburger menu) pick the runner (and, for DirectML, the adapter) and remember
+the choice across restarts. On the CLI:
 
 ```
-kirafrqgen-cli --list-ml-devices                        # adapters and their indices
-kirafrqgen-cli bank                                     # DirectML when available, else CPU
+kirafrqgen-cli --list-ml-devices                        # DirectML adapters and their indices
+kirafrqgen-cli bank                                     # the GPU runner when available, else CPU
 kirafrqgen-cli bank --ml-runner cpu                     # force the processor
-kirafrqgen-cli bank --ml-runner directml --ml-device 1  # pin a specific adapter
+kirafrqgen-cli bank --ml-runner directml --ml-device 1  # Windows: pin a specific adapter
+kirafrqgen-cli bank --ml-runner coreml                  # Apple silicon: Core ML
 ```
 
-ONNX Runtime keeps its CPU execution provider alongside DirectML, so operations DirectML
-does not take run on the CPU. DIO and Harvest always run on the CPU. The Windows release
-binaries bundle Microsoft's DirectML runtime (see [CREDITS.md](CREDITS.md)).
+ONNX Runtime keeps its CPU execution provider alongside the GPU runners, so operations they do
+not take run on the CPU. DIO and Harvest always run on the CPU. The Windows release binaries
+bundle Microsoft's DirectML runtime (see [CREDITS.md](CREDITS.md)). Core ML caches its compiled
+models under `~/Library/Caches/KiraFrqGen/coreml` (~670 MB for RMVPE), so only the first run
+compiles; deleting that folder is safe.
 
 ## License
 

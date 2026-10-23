@@ -41,10 +41,12 @@ while SwiftF0's is shaped by the energy voicing gate. _Avoid_: calling it a "res
 
 ## ML runner
 
-Which ONNX Runtime execution provider runs the ML estimators: CPU (default, every build) or
-DirectML (Windows ML builds: a DirectX 12 GPU, selectable by DXGI adapter index, or automatic).
-ONNX Runtime keeps its CPU execution provider alongside DirectML, so operations DirectML does not
-take run on the CPU. GUI: hamburger menu > Advanced settings; CLI: `--ml-runner`. _Avoid_:
+Which ONNX Runtime execution provider runs the ML estimators: CPU (every build), DirectML
+(Windows ML builds: a DirectX 12 GPU, selectable by DXGI adapter index, or automatic) or Core ML
+(Apple-silicon macOS ML builds: the Mac's GPU). The default is the platform's GPU runner when it is
+usable, else CPU. ONNX Runtime keeps its CPU execution provider alongside the GPU runners, so
+operations they do not take run on the CPU. GUI: hamburger menu > Advanced settings; CLI:
+`--ml-runner`. _Avoid_:
 "backend" or "provider" alone for this setting.
 
 ## Model file

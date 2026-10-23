@@ -16,9 +16,9 @@ use eframe::egui::{
 };
 use egui_phosphor::regular as icons;
 use kirafrqgen_core::{
-    CancelToken, DIRECTML_SUPPORTED, Estimator, F0Config, FileReport, GenerateOptions, MlConfig,
-    MlDevice, MlRunner, Progress, RunSummary, Sharing, Target, build_estimator, default_ml_runner,
-    directml_usable, generate_wavs, ml_available, plan,
+    COREML_SUPPORTED, CancelToken, DIRECTML_SUPPORTED, Estimator, F0Config, FileReport,
+    GenerateOptions, MlConfig, MlDevice, MlRunner, Progress, RunSummary, Sharing, Target,
+    build_estimator, default_ml_runner, generate_wavs, ml_available, ml_runner_usable, plan,
 };
 
 use crate::run::{Row, RunState, Status};
@@ -47,39 +47,68 @@ const ADVANCED_STORAGE_KEY: &str = "advanced";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct AdvancedSettings {
-    /// The DirectML runner was selected.
-    directml: bool,
+    /// The selected runner; absent in a store from before Core ML (#81),
+    /// where `directml` carries the choice.
+    runner: Option<StoredRunner>,
     /// The DirectML adapter index; `None` is the automatic choice.
     directml_device: Option<u32>,
+    /// #81's only runner field: the DirectML runner was selected. Read when
+    /// `runner` is absent, never written.
+    #[serde(skip_serializing)]
+    directml: bool,
+}
+
+/// [`MlRunner`] as stored; core's type carries no serde.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum StoredRunner {
+    Cpu,
+    DirectMl,
+    CoreMl,
 }
 
 impl AdvancedSettings {
     /// Read the stored settings, or the capability-aware first-run default
-    /// (DirectML when `directml_usable`, else CPU). A stored DirectML choice
-    /// steps down to CPU when the machine can no longer use it.
+    /// (the platform's GPU runner when `usable`, else CPU). A stored GPU
+    /// choice steps down to CPU when the machine can no longer use it.
     fn load(
         storage: Option<&dyn eframe::Storage>,
-        directml_usable: bool,
+        usable: impl Fn(MlRunner) -> bool,
     ) -> (MlRunner, Option<u32>) {
         let stored: Option<Self> =
             storage.and_then(|storage| eframe::get_value(storage, ADVANCED_STORAGE_KEY));
-        match stored {
-            None => (default_ml_runner(directml_usable), None),
-            Some(Self {
-                directml: true,
-                directml_device,
-            }) if directml_usable => (MlRunner::DirectMl, directml_device),
-            Some(_) => (MlRunner::Cpu, None),
+        let Some(stored) = stored else {
+            return (default_ml_runner(usable), None);
+        };
+        let runner = match stored.runner {
+            Some(StoredRunner::Cpu) => MlRunner::Cpu,
+            Some(StoredRunner::DirectMl) => MlRunner::DirectMl,
+            Some(StoredRunner::CoreMl) => MlRunner::CoreMl,
+            None if stored.directml => MlRunner::DirectMl,
+            None => MlRunner::Cpu,
+        };
+        match runner {
+            MlRunner::Cpu => (MlRunner::Cpu, None),
+            _ if !usable(runner) => (MlRunner::Cpu, None),
+            MlRunner::DirectMl => (MlRunner::DirectMl, stored.directml_device),
+            _ => (runner, None),
         }
     }
 
     /// Snapshot the live state; the device only applies while the DirectML
     /// runner is selected.
     fn from_app(ml_runner: MlRunner, directml_device: Option<u32>) -> Self {
-        let directml = ml_runner.is_directml();
         Self {
-            directml,
-            directml_device: if directml { directml_device } else { None },
+            runner: Some(match ml_runner {
+                MlRunner::Cpu => StoredRunner::Cpu,
+                MlRunner::DirectMl => StoredRunner::DirectMl,
+                MlRunner::CoreMl => StoredRunner::CoreMl,
+            }),
+            directml_device: if ml_runner.is_directml() {
+                directml_device
+            } else {
+                None
+            },
+            directml: false,
         }
     }
 
@@ -300,7 +329,7 @@ impl KiraFrqGenApp {
             .map(|cores| cores.get() as u32)
             .unwrap_or(4);
         let ml_available = ml_available(&F0Config::default());
-        let (ml_runner, directml_device) = AdvancedSettings::load(storage, directml_usable());
+        let (ml_runner, directml_device) = AdvancedSettings::load(storage, ml_runner_usable);
         let mut app = Self {
             estimator: kirafrqgen_core::default_estimator(ml_available),
             ml_available,
@@ -510,12 +539,24 @@ impl KiraFrqGenApp {
                 ui.add_enabled_ui(!self.is_running(), |ui| {
                     ui.label(RichText::new("ML RUNNER").size(13.0).strong());
                     ui.radio_value(&mut self.ml_runner, MlRunner::Cpu, "CPU");
+                    // Each GPU runner shows on its own platform only: a
+                    // radio where the build has it, else why not.
                     if DIRECTML_SUPPORTED {
                         ui.radio_value(&mut self.ml_runner, MlRunner::DirectMl, "DirectML");
-                    } else {
+                    } else if cfg!(windows) {
                         ui.label(
                             RichText::new("DirectML is only available in Windows ML builds.")
                                 .weak(),
+                        );
+                    }
+                    if COREML_SUPPORTED {
+                        ui.radio_value(&mut self.ml_runner, MlRunner::CoreMl, "Core ML");
+                    } else if cfg!(target_os = "macos") {
+                        ui.label(
+                            RichText::new(
+                                "Core ML is only available in Apple-silicon macOS ML builds.",
+                            )
+                            .weak(),
                         );
                     }
                     ui.label(RichText::new(self.ml_runner.description()).weak());
@@ -1594,12 +1635,19 @@ mod tests {
     }
 
     #[test]
-    fn the_advanced_runner_defaults_to_directml_when_usable() {
+    fn the_advanced_runner_defaults_to_the_usable_gpu_runner() {
         assert_eq!(
-            AdvancedSettings::load(None, true),
+            AdvancedSettings::load(None, |runner| runner == MlRunner::DirectMl),
             (MlRunner::DirectMl, None)
         );
-        assert_eq!(AdvancedSettings::load(None, false), (MlRunner::Cpu, None));
+        assert_eq!(
+            AdvancedSettings::load(None, |runner| runner == MlRunner::CoreMl),
+            (MlRunner::CoreMl, None)
+        );
+        assert_eq!(
+            AdvancedSettings::load(None, |_| false),
+            (MlRunner::Cpu, None)
+        );
     }
 
     #[test]
@@ -1607,25 +1655,60 @@ mod tests {
         let mut storage = TestStorage::default();
         AdvancedSettings::from_app(MlRunner::DirectMl, Some(2)).store(&mut storage);
         assert_eq!(
-            AdvancedSettings::load(Some(&storage), true),
+            AdvancedSettings::load(Some(&storage), |_| true),
             (MlRunner::DirectMl, Some(2))
+        );
+
+        AdvancedSettings::from_app(MlRunner::CoreMl, Some(2)).store(&mut storage);
+        assert_eq!(
+            AdvancedSettings::load(Some(&storage), |_| true),
+            (MlRunner::CoreMl, None),
+            "Core ML carries no adapter"
         );
 
         AdvancedSettings::from_app(MlRunner::Cpu, Some(2)).store(&mut storage);
         assert_eq!(
-            AdvancedSettings::load(Some(&storage), true),
+            AdvancedSettings::load(Some(&storage), |_| true),
             (MlRunner::Cpu, None),
             "the processor choice wins and carries no adapter"
         );
     }
 
     #[test]
-    fn a_stored_directml_choice_steps_down_when_unusable() {
+    fn a_stored_gpu_choice_steps_down_when_unusable() {
+        for runner in [MlRunner::DirectMl, MlRunner::CoreMl] {
+            let mut storage = TestStorage::default();
+            AdvancedSettings::from_app(runner, Some(2)).store(&mut storage);
+            assert_eq!(
+                AdvancedSettings::load(Some(&storage), |_| false),
+                (MlRunner::Cpu, None),
+                "{runner:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_directml_choice_stored_before_core_ml_still_loads() {
+        // #81 stored only a DirectML flag and the adapter.
         let mut storage = TestStorage::default();
-        AdvancedSettings::from_app(MlRunner::DirectMl, Some(2)).store(&mut storage);
+        eframe::Storage::set_string(
+            &mut storage,
+            ADVANCED_STORAGE_KEY,
+            "(directml: true, directml_device: Some(1))".to_owned(),
+        );
         assert_eq!(
-            AdvancedSettings::load(Some(&storage), false),
-            (MlRunner::Cpu, None)
+            AdvancedSettings::load(Some(&storage), |_| true),
+            (MlRunner::DirectMl, Some(1))
+        );
+        eframe::Storage::set_string(
+            &mut storage,
+            ADVANCED_STORAGE_KEY,
+            "(directml: false, directml_device: None)".to_owned(),
+        );
+        assert_eq!(
+            AdvancedSettings::load(Some(&storage), |_| true),
+            (MlRunner::Cpu, None),
+            "an explicit processor choice is not replaced by the GPU default"
         );
     }
 
