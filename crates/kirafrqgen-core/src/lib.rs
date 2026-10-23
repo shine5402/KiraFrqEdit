@@ -411,8 +411,10 @@ pub trait F0Estimator: Send + Sync {
     }
 
     /// Whether the run must process one wav at a time whatever `jobs` says.
-    /// The remote runner opts in: the server runs one estimate at a time
-    /// anyway, and wavs queued behind it would only stall cancellation.
+    /// Every ML estimator opts in, local or remote: a session runs one
+    /// inference at a time anyway, so parallel wavs only queue behind it and
+    /// stall cancellation. `jobs` then only sizes the CPU runner's ONNX
+    /// Runtime threads.
     fn serial(&self) -> bool {
         false
     }
@@ -579,6 +581,10 @@ impl F0Estimator for MlEstimator {
             f0_hz: track.f0_hz,
         })
     }
+
+    fn serial(&self) -> bool {
+        true
+    }
 }
 
 /// Adapts core's frame observer onto the provider's coarse stage ticks (#48:
@@ -598,8 +604,9 @@ impl kirafrq_ml_provider::ProgressObserver for MlProgress<'_> {
 /// a resolvable RMVPE file, or with a missing explicit model is an early
 /// [`GeneratorError::Config`], not a per-file failure.
 ///
-/// `jobs` is the run's single "cores" knob ([`GenerateOptions::jobs`]); the
-/// ML session maps it onto ONNX Runtime's intra-op threads.
+/// `jobs` is the run's single "cores" knob ([`GenerateOptions::jobs`]); an
+/// ML estimator runs one wav at a time and the CPU runner's session maps it
+/// onto ONNX Runtime's intra-op threads (a GPU runner ignores it).
 pub fn build_estimator(
     config: &F0Config,
     jobs: usize,
@@ -823,7 +830,8 @@ pub struct GenerateOptions {
     /// Regenerate tables that already exist (and delete a stale frq alternate).
     pub overwrite: bool,
     pub f0: F0Config,
-    /// Worker threads; `0` = all cores.
+    /// Worker threads; `0` = all cores. An ML estimator runs one wav at a
+    /// time and spends this on the CPU runner's ONNX Runtime threads.
     pub jobs: usize,
     /// mrq sharing flag (#10): also key entries by the Japanese-side name.
     pub sharing: Option<Sharing>,

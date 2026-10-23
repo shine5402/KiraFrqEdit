@@ -98,7 +98,9 @@ pub struct Cli {
     #[arg(long)]
     pub overwrite: bool,
 
-    /// Worker threads: `auto` (all cores) or a count.
+    /// Worker threads: `auto` (all cores) or a count. An ML estimator runs
+    /// one wav at a time; this sets its threads on the CPU runner and has no
+    /// effect on a GPU or remote runner.
     #[arg(short, long, default_value = "auto", value_name = "auto|N", value_parser = parse_jobs)]
     pub jobs: usize,
 

@@ -1065,15 +1065,30 @@ impl KiraFrqGenApp {
 
             ui.add_space(8.0);
             ui.label(RichText::new("CORES").size(13.0).strong());
-            ui.horizontal(|ui| {
-                if ui.checkbox(&mut self.cores_auto, "All cores").changed() && self.cores_auto {
-                    self.cores = self.max_cores;
-                }
-                ui.add_enabled(
-                    !self.cores_auto,
-                    egui::DragValue::new(&mut self.cores).range(1..=self.max_cores),
-                );
+            // ML runs one file at a time; only the CPU runner spends cores,
+            // inside each inference.
+            let ml = matches!(self.estimator, Estimator::Rmvpe | Estimator::SwiftF0);
+            let cores_apply = !ml || self.ml_runner == MlRunner::Cpu;
+            ui.add_enabled_ui(cores_apply, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut self.cores_auto, "All cores").changed() && self.cores_auto {
+                        self.cores = self.max_cores;
+                    }
+                    ui.add_enabled(
+                        !self.cores_auto,
+                        egui::DragValue::new(&mut self.cores).range(1..=self.max_cores),
+                    );
+                });
             });
+            if ml {
+                let note = if cores_apply {
+                    "ML estimators process one file at a time, using these cores for each."
+                } else {
+                    "ML estimators process one file at a time on the GPU or ML server, so \
+                     cores do not apply."
+                };
+                ui.add(egui::Label::new(RichText::new(note).weak()).wrap());
+            }
         });
 
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {

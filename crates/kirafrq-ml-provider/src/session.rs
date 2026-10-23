@@ -80,8 +80,8 @@ impl Owned {
 }
 
 /// Build a session: static ONNX Runtime, `Level3` graph optimization,
-/// `inter_op = 1`, `jobs` into the intra-op pool, the configured execution
-/// provider. An on-disk model is committed from its path; a bundled model
+/// `inter_op = 1`, `jobs` into the intra-op pool on the CPU runner (see
+/// [`intra_op_threads`]), the configured execution provider. An on-disk model is committed from its path; a bundled model
 /// from its bytes in memory.
 pub(crate) fn build_session(
     source: &ModelSource,
@@ -93,10 +93,8 @@ pub(crate) fn build_session(
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .map_err(ort_error)?;
     builder = builder.with_inter_threads(1).map_err(ort_error)?;
-    if jobs > 0 {
-        builder = builder
-            .with_intra_threads(intra_op_threads(jobs))
-            .map_err(ort_error)?;
+    if let Some(threads) = intra_op_threads(jobs, config.runner) {
+        builder = builder.with_intra_threads(threads).map_err(ort_error)?;
     }
     builder = with_runner(builder, source, config)?;
     let session = match source {
@@ -186,13 +184,17 @@ fn with_runner(
     }
 }
 
-/// `jobs` clamped to something the machine can use: at least one thread, at
-/// most the available parallelism (an ORT default when `jobs` is 0).
-fn intra_op_threads(jobs: usize) -> usize {
+/// The intra-op threads for `jobs`: only the CPU runner's inference is
+/// bounded by them, so a GPU runner keeps ONNX Runtime's default, as does
+/// `jobs` 0. A count is clamped to at most the available parallelism.
+fn intra_op_threads(jobs: usize, runner: Runner) -> Option<usize> {
+    if jobs == 0 || runner != Runner::Cpu {
+        return None;
+    }
     let available = std::thread::available_parallelism()
         .map(|cores| cores.get())
         .unwrap_or(1);
-    jobs.clamp(1, available.max(1))
+    Some(jobs.min(available))
 }
 
 pub(crate) fn ort_error(error: impl std::fmt::Display) -> Error {
@@ -204,12 +206,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn intra_op_threads_clamp_to_the_machine() {
+    fn intra_op_threads_clamp_to_the_machine_on_the_cpu_runner_only() {
         let available = std::thread::available_parallelism()
             .map(|cores| cores.get())
             .unwrap_or(1);
-        assert_eq!(intra_op_threads(1), 1);
-        assert_eq!(intra_op_threads(available), available);
-        assert_eq!(intra_op_threads(usize::MAX), available);
+        assert_eq!(intra_op_threads(1, Runner::Cpu), Some(1));
+        assert_eq!(intra_op_threads(available, Runner::Cpu), Some(available));
+        assert_eq!(intra_op_threads(usize::MAX, Runner::Cpu), Some(available));
+        assert_eq!(intra_op_threads(0, Runner::Cpu), None);
+        assert_eq!(intra_op_threads(4, Runner::DirectMl), None);
+        assert_eq!(intra_op_threads(4, Runner::CoreMl), None);
     }
 }

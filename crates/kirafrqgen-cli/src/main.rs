@@ -99,10 +99,10 @@ fn run(cli: Cli) -> u8 {
     // estimates, so it never asks.
     if !cli.dry_run
         && let Err(message) = kirafrqgen_cli::resolve_remote(cli.estimator.is_some(), &mut opts.f0)
-        {
-            eprintln!("error: {message}");
-            return 1;
-        }
+    {
+        eprintln!("error: {message}");
+        return 1;
+    }
 
     let started = Instant::now();
     let plan = match plan(&opts) {
