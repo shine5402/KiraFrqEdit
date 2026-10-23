@@ -162,6 +162,10 @@ fn usage_errors_exit_2_with_an_empty_stdout() {
         &["bank", "--delete-llsm", "--no-delete-llsm"],
         &["bank", "--ml-device", "1"],
         &["bank", "--ml-runner", "vulkan"],
+        &["--port", "40000"],
+        &["--token", "secret"],
+        &["--serve", "bank"],
+        &["bank", "--ml-server-token", "secret"],
     ];
     for args in cases {
         let run = cli(&scratch.0, args);
@@ -932,4 +936,305 @@ fn non_ascii_wav_names_round_trip() {
         run.stderr
     );
     assert!(scratch.path("bank/_かきくけこ_wav.frq").exists());
+}
+
+// --- ML server and the remote runner (#85) -----------------------------------
+
+/// A `--serve` child, killed on drop. Spawning waits for the startup report's
+/// last line, so the server is listening once this returns.
+struct Serve {
+    child: std::process::Child,
+    stdout: Vec<String>,
+}
+
+impl Serve {
+    fn start(args: &[&str], env: &[(&str, &str)]) -> Self {
+        use std::io::BufRead;
+
+        let mut command = Command::new(BIN);
+        command
+            .arg("--serve")
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let mut child = command.spawn().expect("kirafrqgen-cli --serve runs");
+        let mut lines = std::io::BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut stdout = Vec::new();
+        for line in lines.by_ref() {
+            let line = line.unwrap();
+            let done = line.contains("Ctrl-C");
+            stdout.push(line);
+            if done {
+                break;
+            }
+        }
+        assert!(
+            stdout.last().is_some_and(|line| line.contains("Ctrl-C")),
+            "the server did not finish starting: {stdout:?}"
+        );
+        Self { child, stdout }
+    }
+
+    /// The port from the `Listening on` line.
+    fn port(&self) -> u16 {
+        let line = self.line("Listening on");
+        line.rsplit(':').next().unwrap().trim().parse().unwrap()
+    }
+
+    fn line(&self, prefix: &str) -> &str {
+        self.stdout
+            .iter()
+            .find(|line| line.starts_with(prefix))
+            .unwrap_or_else(|| panic!("no `{prefix}` line in {:?}", self.stdout))
+    }
+
+    /// Stop the server and return its stderr.
+    fn stop(mut self) -> String {
+        use std::io::Read;
+
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let mut stderr = String::new();
+        if let Some(mut pipe) = self.child.stderr.take() {
+            pipe.read_to_string(&mut stderr).unwrap();
+        }
+        stderr
+    }
+}
+
+impl Drop for Serve {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn serve_reports_its_address_runner_estimators_and_token() {
+    if !cfg!(feature = "ml") {
+        return;
+    }
+    let server = Serve::start(&["--port", "0", "--ml-runner", "cpu"], &[]);
+    assert!(server.port() != 0);
+    let listening = server.line("Listening on");
+    assert!(listening.contains("0.0.0.0:"), "{listening}");
+    assert!(listening.contains("[::]:"), "both families: {listening}");
+    assert!(
+        server.line("ML runner:").contains("CPU"),
+        "{:?}",
+        server.stdout
+    );
+    let estimators = server.line("ML estimators:");
+    assert!(estimators.contains("SwiftF0"), "{estimators}");
+    assert!(
+        !estimators.contains("RMVPE,"),
+        "no RMVPE model here: {estimators}"
+    );
+    assert!(server.line("Token:").contains("not required"));
+    let stderr = server.stop();
+    assert!(
+        stderr.contains("rmvpe.onnx"),
+        "the missing model is reported: {stderr}"
+    );
+
+    let server = Serve::start(
+        &["--port", "0", "--ml-runner", "cpu", "--token", "secret"],
+        &[],
+    );
+    assert!(server.line("Token:").contains("required"));
+    assert!(!server.line("Token:").contains("not required"));
+}
+
+/// Bind `address`, retrying for a moment: on macOS std marks a new socket
+/// close-on-exec only after creating it, so a CLI child a concurrent test
+/// spawns in between inherits it and keeps a just-dropped port bound until
+/// it exits.
+fn hold(address: &str) -> std::net::TcpListener {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match std::net::TcpListener::bind(address) {
+            Ok(listener) => return listener,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AddrInUse
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => panic!("cannot hold {address}: {error}"),
+        }
+    }
+}
+
+#[test]
+fn serve_takes_the_default_port_and_warns_when_it_is_held() {
+    if !cfg!(feature = "ml") {
+        return;
+    }
+    // One test, in order: every step depends on who holds port 39470.
+    let server = Serve::start(&["--ml-runner", "cpu"], &[]);
+    assert_eq!(server.port(), 39470, "{:?}", server.stdout);
+    server.stop();
+
+    // Held on IPv6 alone (Windows), or on both (a dual-stack socket on
+    // macOS and Linux): either way the default port is taken.
+    let held_v6 = hold("[::]:39470");
+    let server = Serve::start(&["--ml-runner", "cpu"], &[]);
+    assert_ne!(server.port(), 39470, "{:?}", server.stdout);
+    server.stop();
+    drop(held_v6);
+
+    let held = hold("0.0.0.0:39470");
+    let server = Serve::start(&["--ml-runner", "cpu"], &[]);
+    let port = server.port();
+    assert_ne!(port, 39470);
+    let stderr = server.stop();
+    assert!(stderr.contains("warning:"), "{stderr}");
+    assert!(stderr.contains("39470"), "{stderr}");
+    assert!(
+        stderr.contains(&port.to_string()),
+        "names the bound port: {stderr}"
+    );
+
+    let scratch = Scratch::new("serve-port-held");
+    let run = cli(
+        &scratch.0,
+        &["--serve", "--port", "39470", "--ml-runner", "cpu"],
+    );
+    assert_ne!(run.code, 0);
+    assert!(run.stderr.contains("39470"), "{}", run.stderr);
+    assert!(run.stderr.contains("already in use"), "{}", run.stderr);
+    drop(held);
+}
+
+#[test]
+fn the_remote_runner_needs_a_server_address() {
+    if !cfg!(feature = "ml") {
+        return;
+    }
+    let scratch = Scratch::new("remote-usage");
+    let cases: &[&[&str]] = &[
+        &["bank", "--ml-runner", "remote"],
+        &["bank", "--ml-server", "mac.local"],
+        &[
+            "bank",
+            "--ml-runner",
+            "remote",
+            "--ml-server",
+            "mac.local:0",
+        ],
+        &["bank", "--ml-runner", "remote", "--ml-server", "[::1"],
+        &["--serve", "--ml-runner", "remote"],
+    ];
+    for args in cases {
+        let run = cli(&scratch.0, args);
+        assert_eq!(run.code, 2, "args {args:?}: {}", run.stderr);
+        assert!(run.stdout_is_empty(), "args {args:?}");
+    }
+}
+
+#[test]
+fn an_unreachable_ml_server_fails_before_any_file() {
+    if !cfg!(feature = "ml") {
+        return;
+    }
+    let scratch = Scratch::new("remote-unreachable");
+    write_tone(&scratch, "bank/A2.wav");
+    let free = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let run = cli(
+        &scratch.0,
+        &[
+            "bank",
+            "--ml-runner",
+            "remote",
+            "--ml-server",
+            &free.to_string(),
+        ],
+    );
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    assert!(
+        run.stderr.contains("cannot reach the ML server"),
+        "{}",
+        run.stderr
+    );
+    assert!(!scratch.path("bank/A2_wav.frq").exists());
+}
+
+#[test]
+fn a_remote_run_defaults_to_the_servers_estimator_and_equals_a_local_run() {
+    if !cfg!(feature = "ml") {
+        return;
+    }
+    let scratch = Scratch::new("remote-run");
+    write_tone(&scratch, "remote/A2.wav");
+    write_tone(&scratch, "local/A2.wav");
+    let model_dir = fixture_model_dir(&scratch);
+
+    // The server has RMVPE (the committed fixture); the client has no model
+    // at all, so a default of RMVPE can only come from the server.
+    let server = Serve::start(
+        &[
+            "--port",
+            "0",
+            "--ml-runner",
+            "cpu",
+            "-j",
+            "1",
+            "--token",
+            "secret",
+        ],
+        &[("KIRAFRQ_ML_DIR", &model_dir)],
+    );
+    assert!(server.line("ML estimators:").contains("RMVPE"));
+    let address = format!("127.0.0.1:{}", server.port());
+    let run = cli(
+        &scratch.0,
+        &[
+            "remote",
+            "--ml-runner",
+            "remote",
+            "--ml-server",
+            &address,
+            "--ml-server-token",
+            "secret",
+            "-v",
+        ],
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(run.stderr.contains("wrote frq"), "{}", run.stderr);
+
+    let local = cli_with_env(
+        &scratch.0,
+        &[
+            "local",
+            "--estimator",
+            "rmvpe",
+            "--ml-runner",
+            "cpu",
+            "-j",
+            "1",
+        ],
+        &[("KIRAFRQ_ML_DIR", &model_dir)],
+    );
+    assert_eq!(local.code, 0, "{}", local.stderr);
+    assert_eq!(
+        frq::read(&scratch.path("remote/A2_wav.frq")).unwrap(),
+        frq::read(&scratch.path("local/A2_wav.frq")).unwrap()
+    );
+
+    // A wrong token stops the run before any file.
+    write_tone(&scratch, "denied/A2.wav");
+    let run = cli(
+        &scratch.0,
+        &["denied", "--ml-runner", "remote", "--ml-server", &address],
+    );
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    assert!(run.stderr.contains("requires a token"), "{}", run.stderr);
+    assert!(!scratch.path("denied/A2_wav.frq").exists());
 }

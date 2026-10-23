@@ -14,6 +14,8 @@
 pub mod llsm;
 
 mod paths;
+#[cfg(feature = "ml")]
+mod remote;
 mod run;
 mod scan;
 mod table;
@@ -102,6 +104,9 @@ pub enum MlRunner {
     DirectMl,
     /// Core ML (Apple-silicon Mac): the Mac's GPU (#84).
     CoreMl,
+    /// An ML server on the network (#85), on whatever runner the server
+    /// uses; [`MlConfig::server`] names it.
+    Remote,
 }
 
 impl MlRunner {
@@ -111,12 +116,87 @@ impl MlRunner {
             MlRunner::Cpu => "Runs the ML estimators on the processor.",
             MlRunner::DirectMl => "Runs the ML estimators on a DirectX 12 GPU.",
             MlRunner::CoreMl => "Runs the ML estimators on the Mac's GPU through Core ML.",
+            MlRunner::Remote => {
+                "Sends ML estimation to an ML server on the network, which runs it on its own \
+                 ML runner."
+            }
         }
     }
 
     /// Whether the DirectML device setting applies to this runner.
     pub fn is_directml(self) -> bool {
         matches!(self, MlRunner::DirectMl)
+    }
+
+    /// Whether the ML server settings apply to this runner.
+    pub fn is_remote(self) -> bool {
+        matches!(self, MlRunner::Remote)
+    }
+}
+
+/// The ML server's default port (#85).
+pub const ML_SERVER_DEFAULT_PORT: u16 = 39470;
+
+#[cfg(feature = "ml")]
+const _: () = assert!(ML_SERVER_DEFAULT_PORT == kirafrq_ml_remote::DEFAULT_PORT);
+
+/// Where an ML server listens: a host (an IPv6 address without its
+/// brackets) and a port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MlServer {
+    pub host: String,
+    pub port: u16,
+}
+
+impl MlServer {
+    /// Parse `HOST[:PORT]`; the port defaults to [`ML_SERVER_DEFAULT_PORT`].
+    /// An IPv6 host goes in brackets when a port follows (`[fd00::20]:39470`);
+    /// a bare IPv6 address takes the default port.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let value = value.trim();
+        let port = |text: &str| {
+            text.parse::<u16>()
+                .ok()
+                .filter(|&port| port != 0)
+                .ok_or_else(|| format!("`{text}` is not a port (1-65535)"))
+        };
+        let (host, port) = if let Some(rest) = value.strip_prefix('[') {
+            let (host, after) = rest
+                .split_once(']')
+                .ok_or_else(|| format!("`{value}` has no closing `]`"))?;
+            if after.is_empty() {
+                (host, ML_SERVER_DEFAULT_PORT)
+            } else {
+                let text = after
+                    .strip_prefix(':')
+                    .ok_or_else(|| format!("`{value}` has text after `]` that is not a port"))?;
+                (host, port(text)?)
+            }
+        } else {
+            match value.split_once(':') {
+                // More than one colon: a bare IPv6 address.
+                Some((_, rest)) if rest.contains(':') => (value, ML_SERVER_DEFAULT_PORT),
+                Some((host, text)) => (host, port(text)?),
+                None => (value, ML_SERVER_DEFAULT_PORT),
+            }
+        };
+        if host.is_empty() || host.chars().any(char::is_whitespace) {
+            return Err(format!("`{value}` has no host"));
+        }
+        Ok(Self {
+            host: host.to_string(),
+            port,
+        })
+    }
+}
+
+impl std::fmt::Display for MlServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.host.contains(':') {
+            write!(f, "[{}]:{}", self.host, self.port)
+        } else {
+            write!(f, "{}:{}", self.host, self.port)
+        }
     }
 }
 
@@ -138,6 +218,10 @@ pub struct MlConfig {
     /// `device_id`). `None` lets ONNX Runtime prefer the high-performance
     /// GPU. Ignored unless `runner` is a DirectML variant.
     pub directml_device: Option<u32>,
+    /// The ML server for [`MlRunner::Remote`]; ignored by the other runners.
+    pub server: Option<MlServer>,
+    /// The ML server's shared token, when it was started with one.
+    pub server_token: Option<String>,
 }
 
 /// Whether this build can offer the DirectML runner at all (Windows `ml`
@@ -220,10 +304,11 @@ pub fn coreml_usable() -> bool {
 }
 
 /// Whether `runner` can run here: CPU in every ML build, the GPU runners per
-/// [`directml_usable`] and [`coreml_usable`].
+/// [`directml_usable`] and [`coreml_usable`]. Remote is offered by every ML
+/// build; whether its server answers is [`ml_server_info`]'s question.
 pub fn ml_runner_usable(runner: MlRunner) -> bool {
     match runner {
-        MlRunner::Cpu => ML_SUPPORTED,
+        MlRunner::Cpu | MlRunner::Remote => ML_SUPPORTED,
         MlRunner::DirectMl => directml_usable(),
         MlRunner::CoreMl => coreml_usable(),
     }
@@ -514,6 +599,11 @@ pub fn build_estimator(
 ) -> Result<Box<dyn F0Estimator>, GeneratorError> {
     match config.estimator {
         Estimator::Dio | Estimator::Harvest => Ok(Box::new(WorldEstimator::new(config.clone()))),
+        // The DSP estimators always run here; only ML estimation goes remote.
+        #[cfg(feature = "ml")]
+        Estimator::Rmvpe | Estimator::SwiftF0 if config.ml.runner.is_remote() => {
+            remote::build(config)
+        }
         Estimator::Rmvpe => build_ml_estimator(config, jobs),
         Estimator::SwiftF0 => build_swiftf0_estimator(config, jobs),
     }
@@ -557,6 +647,9 @@ fn ml_session(config: &F0Config) -> kirafrq_ml_provider::SessionConfig {
             MlRunner::Cpu => kirafrq_ml_provider::Runner::Cpu,
             MlRunner::DirectMl => kirafrq_ml_provider::Runner::DirectMl,
             MlRunner::CoreMl => kirafrq_ml_provider::Runner::CoreMl,
+            // The factory sends Remote to the ML server before a local
+            // session is ever configured.
+            MlRunner::Remote => kirafrq_ml_provider::Runner::Cpu,
         },
         directml_device: config.ml.directml_device,
     }
@@ -644,7 +737,8 @@ pub const ML_SUPPORTED: bool = cfg!(feature = "ml");
 
 /// Whether RMVPE can run right now: the feature is on and a model file
 /// resolves. The front ends use it for the capability-aware default (#49) and
-/// for the model-missing UX (#72).
+/// for the model-missing UX (#72). This is the local answer; with
+/// [`MlRunner::Remote`] the front ends ask [`ml_server_info`] instead.
 pub fn ml_available(config: &F0Config) -> bool {
     if !ML_SUPPORTED {
         return false;
@@ -661,6 +755,49 @@ pub fn ml_available(config: &F0Config) -> bool {
                 false
             }
         }
+    }
+}
+
+/// What an ML server reported (#85), for the front ends' availability,
+/// default estimator and connection test.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MlServerInfo {
+    /// One line: the server's KiraFrqGen version, ML runner and device, and
+    /// its ML estimators.
+    pub summary: String,
+    /// The server has RMVPE's model file.
+    pub rmvpe: bool,
+    /// The server can run SwiftF0.
+    pub swiftf0: bool,
+    /// The server runs another KiraFrqGen version under the same protocol;
+    /// a warning, not an error.
+    pub version_warning: Option<String>,
+}
+
+impl MlServerInfo {
+    /// Whether the server can run `estimator`; the DSP estimators never run
+    /// there, so they are always `false`.
+    pub fn available(&self, estimator: Estimator) -> bool {
+        match estimator {
+            Estimator::Rmvpe => self.rmvpe,
+            Estimator::SwiftF0 => self.swiftf0,
+            Estimator::Dio | Estimator::Harvest => false,
+        }
+    }
+}
+
+/// Ask `config`'s ML server what it is and whether it accepts the token. An
+/// unreachable server, a protocol mismatch and a missing or wrong token are
+/// `Err` with the user-facing reason. Blocks for up to a few seconds.
+pub fn ml_server_info(config: &MlConfig) -> Result<MlServerInfo, String> {
+    #[cfg(feature = "ml")]
+    {
+        remote::server_info(config)
+    }
+    #[cfg(not(feature = "ml"))]
+    {
+        let _ = config;
+        Err("this build has no ML support".to_string())
     }
 }
 
@@ -920,7 +1057,12 @@ mod tests {
 
     #[test]
     fn every_ml_runner_has_a_description() {
-        for runner in [MlRunner::Cpu, MlRunner::DirectMl, MlRunner::CoreMl] {
+        for runner in [
+            MlRunner::Cpu,
+            MlRunner::DirectMl,
+            MlRunner::CoreMl,
+            MlRunner::Remote,
+        ] {
             assert!(!runner.description().is_empty());
         }
     }

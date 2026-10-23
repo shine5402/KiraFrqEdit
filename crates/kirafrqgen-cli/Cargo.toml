@@ -14,13 +14,23 @@ path = "src/main.rs"
 # The modern default artifact: the ML tier is compiled in and ONNX Runtime is
 # linked statically (#48). `--no-default-features` is the compat build.
 default = ["ml"]
-ml = ["kirafrqgen-core/ml"]
+ml = [
+    "kirafrqgen-core/ml",
+    "dep:kirafrq-ml-remote",
+    "dep:kirafrq-ml-provider",
+    "dep:if-addrs",
+]
 
 [dependencies]
 kirafrqgen-core = { workspace = true, default-features = false }
 kirafrq-credits.workspace = true
 clap.workspace = true
 ctrlc.workspace = true
+# `--serve` (#85): the ML server, the provider's model lookup and runner
+# settings, and the LAN addresses the startup report lists.
+kirafrq-ml-remote = { workspace = true, optional = true, features = ["server"] }
+kirafrq-ml-provider = { workspace = true, optional = true, features = ["ort"] }
+if-addrs = { workspace = true, optional = true }
 
 [dev-dependencies]
 hound.workspace = true

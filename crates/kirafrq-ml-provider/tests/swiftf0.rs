@@ -201,3 +201,50 @@ fn the_resample_lands_on_the_table_grid_for_a_non_44_1_length() {
     assert!((track.frame_period_ms - 256.0 / 44_100.0 * 1000.0).abs() < 1e-12);
     assert_eq!(TABLE_SAMPLE_RATE, 44_100);
 }
+
+#[test]
+fn an_owned_session_shared_across_threads_matches_serial_estimates() {
+    // The ML server's request threads share one owned session per estimator;
+    // estimates queued from several threads must read exactly what the
+    // process-wide session reads one by one.
+    let clips: Vec<Vec<f64>> = [110.0, 196.0, 262.0, 330.0]
+        .iter()
+        .enumerate()
+        .map(|(index, &hz)| harmonic_stack_44100(20_000 + index * 3_000, hz))
+        .collect();
+    let shared = bundled();
+    let serial: Vec<_> = clips
+        .iter()
+        .map(|clip| shared.estimate(clip, None).unwrap())
+        .collect();
+
+    let owned = bundled().with_own_session().unwrap();
+    owned.warm().unwrap();
+    let concurrent: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = clips
+            .iter()
+            .map(|clip| scope.spawn(|| owned.estimate(clip, None).unwrap()))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
+    });
+    assert_eq!(concurrent, serial);
+}
+
+#[test]
+fn a_policy_swap_keeps_the_session_and_changes_only_the_voicing() {
+    let samples = harmonic_stack_44100(30_000, 220.0);
+    let owned = bundled().with_own_session().unwrap();
+    let strict = owned
+        .clone()
+        .with_policy(UvPolicy::swiftf0(Some(1.1)))
+        .estimate(&samples, None)
+        .unwrap();
+    assert!(strict.f0_hz.iter().all(|&value| value == 0.0));
+    assert_eq!(
+        owned.estimate(&samples, None).unwrap(),
+        bundled().estimate(&samples, None).unwrap()
+    );
+}
