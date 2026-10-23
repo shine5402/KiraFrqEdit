@@ -39,8 +39,9 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// 49152+ range operating systems hand out to outgoing connections.
 pub const DEFAULT_PORT: u16 = 39470;
 
-/// The KiraFrqGen version this crate was built with; a differing server
-/// version under the same protocol is only a warning.
+/// The KiraFrqGen version this crate was built with. Never part of the
+/// compatibility check, which is [`PROTOCOL_VERSION`] alone; it only names
+/// the releases in a protocol mismatch.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The largest request body the server reads: over 12 minutes of raw f64
@@ -109,18 +110,6 @@ impl Info {
             MlEstimator::Rmvpe => self.estimators.rmvpe,
             MlEstimator::SwiftF0 => self.estimators.swiftf0,
         }
-    }
-
-    /// The warning for a server whose KiraFrqGen version differs from this
-    /// one's under the same protocol; `None` when they match.
-    pub fn version_warning(&self) -> Option<String> {
-        (self.version != VERSION).then(|| {
-            format!(
-                "the ML server runs KiraFrqGen {}, this is {VERSION}; the protocol matches, so \
-                 the run goes ahead",
-                self.version
-            )
-        })
     }
 
     /// The names of the ML estimators the server can run.

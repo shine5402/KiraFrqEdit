@@ -2,7 +2,7 @@
 //! incremental per-folder mrq merge.
 //!
 //! `generate` walks the scanned wavs in parallel (a rayon pool sized by
-//! `jobs`): decode (#11), estimate, StoneMask, build the table (#8), then apply
+//! `jobs`, or one thread for a [`F0Estimator::serial`] estimator): decode (#11), estimate, StoneMask, build the table (#8), then apply
 //! the per-target sidecar policy. `frq` and `pmk` are written straight away; a
 //! wav's `mrq` entries are staged into its folder's in-memory `desc.mrq`, and
 //! its `file_finished` waits for the write that persists them. The file is
@@ -70,7 +70,7 @@ pub fn generate_wavs(
         ));
     }
     let descs = folder_descs(wavs, opts);
-    let pool = build_pool(opts.jobs)?;
+    let pool = build_pool(if estimator.serial() { 1 } else { opts.jobs })?;
     let outcomes: Vec<Mutex<FileReport>> = wavs
         .iter()
         .map(|wav| Mutex::new(FileReport::new(wav.clone())))

@@ -97,14 +97,11 @@ fn run(cli: Cli) -> u8 {
     // Before the scan (#85): a misconfigured ML server is one early error, and
     // the default estimator follows what the server offers. A dry run never
     // estimates, so it never asks.
-    if !cli.dry_run {
-        match kirafrqgen_cli::resolve_remote(cli.estimator.is_some(), &mut opts.f0) {
-            Ok(warning) => config_warnings.extend(warning),
-            Err(message) => {
-                eprintln!("error: {message}");
-                return 1;
-            }
-        }
+    if !cli.dry_run
+        && let Err(message) = kirafrqgen_cli::resolve_remote(cli.estimator.is_some(), &mut opts.f0)
+    {
+        eprintln!("error: {message}");
+        return 1;
     }
 
     let started = Instant::now();

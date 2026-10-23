@@ -2001,3 +2001,60 @@ fn skipped_wavs_emit_no_progress_events() {
     generate(&opts, &estimator, &second, &cancel).unwrap();
     assert!(second.events.lock().unwrap().is_empty());
 }
+
+// --- serial estimators --------------------------------------------------------
+
+/// Counts how many estimates overlap; `serial` as configured.
+struct OverlapProbe {
+    serial: bool,
+    running: AtomicUsize,
+    most: AtomicUsize,
+}
+
+impl F0Estimator for OverlapProbe {
+    fn estimate(
+        &self,
+        samples: &[f64],
+        _sample_rate: u32,
+        frame_period_ms: f64,
+        _observer: Option<&dyn kirafrq_world_binding::FrameObserver>,
+    ) -> Result<F0Track, GeneratorError> {
+        let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
+        self.most.fetch_max(now, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(20));
+        self.running.fetch_sub(1, Ordering::SeqCst);
+        let frames = samples.len() / 256 + 1;
+        Ok(F0Track {
+            frame_period_ms,
+            temporal_positions: (0..frames)
+                .map(|index| index as f64 * frame_period_ms / 1000.0)
+                .collect(),
+            f0_hz: vec![220.0; frames],
+        })
+    }
+
+    fn serial(&self) -> bool {
+        self.serial
+    }
+}
+
+#[test]
+fn a_serial_estimator_runs_one_wav_at_a_time_whatever_jobs_says() {
+    let scratch = Scratch::new("serial");
+    for index in 0..8 {
+        write_wav(&scratch, &format!("s{index}.wav"), mono(), &[SAMPLE; 512]);
+    }
+    let mut opts = options(&scratch.0, &[Target::Frq]);
+    opts.jobs = 4;
+    for (serial, check) in [(true, 1..=1), (false, 2..=4)] {
+        opts.overwrite = true;
+        let probe = OverlapProbe {
+            serial,
+            running: AtomicUsize::new(0),
+            most: AtomicUsize::new(0),
+        };
+        assert_eq!(run(&opts, &probe).written, 8);
+        let most = probe.most.load(Ordering::SeqCst);
+        assert!(check.contains(&most), "serial {serial}: {most} at once");
+    }
+}

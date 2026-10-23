@@ -150,6 +150,7 @@ fn server(token: Option<&str>) -> RunningServer {
         threads: JOBS,
         rmvpe: no_rmvpe(),
         swiftf0: resolve_source(),
+        log: None,
     })
     .unwrap()
     .spawn()
@@ -335,6 +336,7 @@ fn a_protocol_mismatch_is_a_configuration_error() {
     let server = scripted(
         Info {
             protocol: PROTOCOL_VERSION + 1,
+            version: "9.9.9".to_string(),
             ..info()
         },
         Vec::new(),
@@ -343,10 +345,14 @@ fn a_protocol_mismatch_is_a_configuration_error() {
     let message = config_error(&options(&dir.0, remote(server.address, None)));
     assert!(message.contains("not a compatible ML server"), "{message}");
     assert!(message.contains("protocol"), "{message}");
+    assert!(
+        message.contains("9.9.9"),
+        "the release is a hint: {message}"
+    );
 }
 
 #[test]
-fn a_differing_version_under_the_same_protocol_still_runs() {
+fn a_differing_version_under_the_same_protocol_runs() {
     let server = scripted(
         Info {
             version: "0.0.1".to_string(),
@@ -357,13 +363,9 @@ fn a_differing_version_under_the_same_protocol_still_runs() {
     let dir = Scratch::new("version");
     write_wav(&dir.0, "a.wav", &short_wav());
     let ml = remote(server.address, None);
-    let summary = run(&options(&dir.0, ml.clone())).unwrap();
+    let summary = run(&options(&dir.0, ml)).unwrap();
     assert_eq!(summary.written, 1, "{:?}", summary.failed);
-    let warning = kirafrqgen_core::ml_server_info(&ml)
-        .unwrap()
-        .version_warning
-        .expect("a version warning");
-    assert!(warning.contains("0.0.1"), "{warning}");
+    assert!(summary.warnings.is_empty(), "{:?}", summary.warnings);
 }
 
 #[test]

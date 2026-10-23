@@ -16,25 +16,21 @@ use kirafrqgen_core::{F0Config, FilePlan, RunSummary, Target};
 /// With the remote runner, ask the ML server before anything runs (#85): an
 /// unreachable server, a protocol mismatch or a missing or wrong token is an
 /// `Err`. Without an explicit `--estimator`, the default follows the
-/// server's availability (RMVPE when the server has its model). Returns the
-/// warning for a server on another KiraFrqGen version. A DSP run never needs
-/// the server.
-pub fn resolve_remote(
-    explicit_estimator: bool,
-    f0: &mut F0Config,
-) -> Result<Option<String>, String> {
+/// server's availability (RMVPE when the server has its model). A DSP run
+/// never needs the server.
+pub fn resolve_remote(explicit_estimator: bool, f0: &mut F0Config) -> Result<(), String> {
     use kirafrqgen_core::Estimator;
 
     if !f0.ml.runner.is_remote()
         || (explicit_estimator && matches!(f0.estimator, Estimator::Dio | Estimator::Harvest))
     {
-        return Ok(None);
+        return Ok(());
     }
     let info = kirafrqgen_core::ml_server_info(&f0.ml)?;
     if !explicit_estimator {
         f0.estimator = kirafrqgen_core::default_estimator(info.rmvpe);
     }
-    Ok(info.version_warning)
+    Ok(())
 }
 
 /// Whether `target` would be written for `file` under the run's overwrite

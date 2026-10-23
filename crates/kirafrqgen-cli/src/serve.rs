@@ -1,8 +1,10 @@
 //! `--serve` (#85): run this machine as an ML server until Ctrl-C.
 //!
-//! The startup report goes to stdout, one fact per line; warnings (a taken
-//! default port, RMVPE's missing model) go to stderr like a run's.
+//! The startup report goes to stdout, one fact per line, then one line per
+//! answered request; warnings (a taken default port, RMVPE's missing model)
+//! go to stderr like a run's.
 
+use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -54,6 +56,10 @@ pub fn run(cli: &Cli) -> u8 {
         threads: cli.jobs,
         rmvpe: kirafrq_ml_provider::resolve_model(),
         swiftf0: kirafrq_ml_provider::swiftf0::resolve_source(),
+        // Not `println!`: it panics once stdout is gone, killing the worker.
+        log: Some(|line| {
+            let _ = writeln!(std::io::stdout(), "{line}");
+        }),
     }) {
         Ok(server) => server,
         Err(error) => {

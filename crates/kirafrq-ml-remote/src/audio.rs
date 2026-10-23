@@ -53,8 +53,15 @@ fn flac(samples: &[i32], bits: u32) -> Result<Vec<u8>, String> {
         .map_err(|(_, error)| format!("FLAC encoder config: {error:?}"))?;
     let source =
         flacenc::source::MemSource::from_samples(samples, 1, bits as usize, SAMPLE_RATE as usize);
-    let stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
+    let mut stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
         .map_err(|error| format!("FLAC encode failed: {error:?}"))?;
+    // The spec's minimum block size excludes the last block, but flacenc
+    // counts it: a wav ending in a block under 16 samples then fails
+    // claxon's STREAMINFO check. Every other block is the fixed size.
+    let info = stream.stream_info_mut();
+    let max = info.max_block_size();
+    info.set_block_sizes(max, max)
+        .map_err(|error| format!("FLAC block sizes: {error:?}"))?;
     let mut sink = flacenc::bitsink::ByteSink::new();
     stream
         .write(&mut sink)
@@ -139,6 +146,15 @@ mod tests {
             "FLAC compresses: {}",
             body.len()
         );
+    }
+
+    #[test]
+    fn a_last_block_under_16_samples_still_decodes() {
+        // Two full 4096-sample blocks and a 5-sample tail.
+        let samples = tone(2 * 4096 + 5, 32_768.0);
+        let (content_type, decoded) = round_trip(&samples);
+        assert_eq!(content_type, FLAC);
+        assert_eq!(decoded, samples);
     }
 
     #[test]
