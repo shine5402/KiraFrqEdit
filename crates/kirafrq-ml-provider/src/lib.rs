@@ -13,7 +13,9 @@
 //!   ([`runner`]).
 //! - **Models** (`ort` on): the ONNX Runtime session, RMVPE's log-mel
 //!   frontend and salience decoder under [`rmvpe`], and SwiftF0's raw-audio
-//!   adapter under [`swiftf0`] (#69). Every `ort` call lives there.
+//!   adapter under [`swiftf0`] (#69), and the Core ML execution provider
+//!   with its model cache (Apple silicon, #84). Every `ort` call lives
+//!   there.
 //!
 //! The pipeline talks to this crate only through `kirafrqgen-core`'s
 //! `F0Estimator` seam; this crate never depends on core.

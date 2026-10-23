@@ -15,7 +15,7 @@ use kirafrq_ml_provider::policy::UvPolicy;
 use kirafrq_ml_provider::runner::{Runner, SessionConfig};
 use kirafrq_ml_provider::swiftf0::{BUNDLED_MODEL, SwiftF0};
 
-const CORE_ML: SessionConfig = SessionConfig {
+const COREML: SessionConfig = SessionConfig {
     runner: Runner::CoreMl,
     directml_device: None,
 };
@@ -50,18 +50,18 @@ fn phrase_16k() -> Vec<f32> {
 }
 
 #[test]
-fn swiftf0_under_core_ml_matches_the_cpu() {
+fn swiftf0_under_coreml_matches_the_cpu() {
     let audio = phrase_16k();
     let cpu = swiftf0(bundled(), 1, SessionConfig::default())
         .native_estimate(&audio)
         .unwrap();
-    let core_ml = swiftf0(bundled(), 1, CORE_ML)
+    let coreml = swiftf0(bundled(), 1, COREML)
         .native_estimate(&audio)
         .unwrap();
 
-    assert_eq!(cpu.len(), core_ml.len());
+    assert_eq!(cpu.len(), coreml.len());
     let mut voiced = 0;
-    for (frame, (&reference, &value)) in cpu.iter().zip(&core_ml).enumerate() {
+    for (frame, (&reference, &value)) in cpu.iter().zip(&coreml).enumerate() {
         assert_eq!(
             reference > 0.0,
             value > 0.0,
@@ -90,9 +90,7 @@ fn the_model_cache_is_reused_and_a_replaced_model_builds_fresh() {
 
     std::fs::write(&path, unique_model("first")).unwrap();
     let first_dir = coreml_cache_dir(&source).unwrap();
-    swiftf0(source.clone(), 1, CORE_ML)
-        .ensure_session()
-        .unwrap();
+    swiftf0(source.clone(), 1, COREML).ensure_session().unwrap();
     let first = snapshot(&first_dir);
     assert!(
         !first.is_empty(),
@@ -101,9 +99,7 @@ fn the_model_cache_is_reused_and_a_replaced_model_builds_fresh() {
     );
 
     // A different thread count rebuilds the session from the same model.
-    swiftf0(source.clone(), 2, CORE_ML)
-        .ensure_session()
-        .unwrap();
+    swiftf0(source.clone(), 2, COREML).ensure_session().unwrap();
     assert_eq!(coreml_cache_dir(&source).unwrap(), first_dir);
     assert_eq!(snapshot(&first_dir), first, "the rebuild reuses the cache");
 
@@ -111,9 +107,7 @@ fn the_model_cache_is_reused_and_a_replaced_model_builds_fresh() {
     std::fs::write(&path, unique_model("second")).unwrap();
     let second_dir = coreml_cache_dir(&source).unwrap();
     assert_ne!(second_dir, first_dir);
-    swiftf0(source.clone(), 1, CORE_ML)
-        .ensure_session()
-        .unwrap();
+    swiftf0(source.clone(), 1, COREML).ensure_session().unwrap();
     assert!(
         !snapshot(&second_dir).is_empty(),
         "the replaced model compiles"

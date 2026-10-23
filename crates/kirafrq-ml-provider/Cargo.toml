@@ -9,7 +9,7 @@ license.workspace = true
 [features]
 default = []
 # The RMVPE model path (ONNX Runtime session, log-mel frontend, decoder). All
-# `ort` use is confined to the `rmvpe` module; the model-free half compiles
+# `ort` use is confined to the model modules; the model-free half compiles
 # and tests with this feature off (#48/#56).
 ort = ["dep:ort", "dep:realfft", "dep:sha2"]
 

@@ -123,10 +123,15 @@ impl Cli {
         };
         #[cfg(feature = "ml")]
         {
-            config.ml.runner = self.ml_runner.map_or_else(
-                || kirafrqgen_core::default_ml_runner(kirafrqgen_core::ml_runner_usable),
-                MlRunner::from,
-            );
+            config.ml.runner = match self.ml_runner {
+                Some(explicit) => explicit.into(),
+                // A DIO or Harvest run never uses the runner; skip the GPU
+                // probe, which builds a Core ML session on Apple silicon.
+                None if matches!(config.estimator, Estimator::Dio | Estimator::Harvest) => {
+                    MlRunner::Cpu
+                }
+                None => kirafrqgen_core::default_ml_runner(kirafrqgen_core::ml_runner_usable),
+            };
             if config.ml.runner.is_directml() {
                 config.ml.directml_device = self.ml_device;
             }
@@ -422,6 +427,14 @@ mod tests {
         };
         assert_eq!(plain.ml.runner, expected);
         assert_eq!(plain.ml.directml_device, None);
+        assert_eq!(
+            parse_ok(&["bank", "--estimator", "harvest"])
+                .f0_config()
+                .ml
+                .runner,
+            MlRunner::Cpu,
+            "a DSP run resolves no GPU runner"
+        );
 
         for (name, runner) in [
             ("cpu", MlRunner::Cpu),

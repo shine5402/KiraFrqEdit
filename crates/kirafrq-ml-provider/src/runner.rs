@@ -6,8 +6,8 @@
 //! always compiled so the front ends can carry the choice in every build. The
 //! DirectML parts are live only in Windows `ort` builds: `ort-sys` ships a
 //! DirectML-enabled ONNX Runtime for Windows (and only Windows), and the
-//! Cargo.toml target entry enables `ort/directml` there. Core ML is the same
-//! for Apple-silicon macOS: the only Core ML build `ort-sys` ships.
+//! Cargo.toml target entry enables `ort/directml` there; Core ML follows the
+//! same pattern for Apple-silicon macOS.
 //!
 //! DirectML's `device_id` is the adapter index in `IDXGIFactory::EnumAdapters`
 //! order (directml's own docs); 0 is the default adapter, which on dual-GPU

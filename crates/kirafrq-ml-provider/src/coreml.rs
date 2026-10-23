@@ -1,12 +1,11 @@
 //! The Core ML runner's execution provider and its model cache (#84);
 //! compiled only for Apple-silicon macOS `ort` builds.
 //!
-//! The options were settled by measurement on an M4 Max (see
-//! `docs/research/coreml-runner.md`): the NeuralNetwork model format, whose
-//! cost per new input length is ~5–10 ms where MLProgram re-specializes for
-//! ~250–400 ms; CPU-and-GPU compute units, which keep the Neural Engine and
-//! its accuracy loss on quiet inputs (ONNX Runtime #33319) out; dynamic
-//! shapes; and no low-precision GPU accumulation.
+//! The options were settled by measurement (`docs/research/coreml-runner.md`):
+//! the NeuralNetwork model format, which handles a new input length far
+//! cheaper than MLProgram; CPU-and-GPU compute units, which keep the Neural
+//! Engine and its accuracy loss on quiet inputs (ONNX Runtime #33319) out;
+//! dynamic shapes; and no low-precision GPU accumulation.
 //!
 //! ONNX Runtime keys its Core ML compile cache by the model path and never
 //! invalidates it, so each model gets its own cache subdirectory keyed by the
@@ -62,7 +61,12 @@ pub(crate) fn execution_provider(source: &ModelSource) -> Result<ExecutionProvid
 pub fn cache_dir(source: &ModelSource) -> Result<PathBuf, Error> {
     let model = match source {
         ModelSource::File(path) => {
-            let read_error = |error| Error::Ort(format!("cannot read {}: {error}", path.display()));
+            let read_error = |error| {
+                Error::Ort(format!(
+                    "cannot read {} for the Core ML model cache: {error}",
+                    path.display()
+                ))
+            };
             let mut file = std::fs::File::open(path).map_err(read_error)?;
             let mut hasher = Sha256::new();
             let mut buffer = vec![0; 1 << 20];

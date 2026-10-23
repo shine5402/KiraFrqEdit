@@ -45,7 +45,7 @@ Measured with RMVPE on synthetic voiced audio, 0.9–5.2 s clips.
 | Compute units | CPU and GPU | ALL measured the same speed and output, and lets the Neural Engine in, which loses accuracy on quiet audio-model inputs (ONNX Runtime #33319). |
 | Input shapes | dynamic | Every wav has its own length. |
 | Low-precision GPU accumulation | off | Full-precision accumulation keeps the drift against CPU under half a cent. |
-| Model cache directory | on | Later starts skip the Core ML compile: 2.16 s → 0.15 s in #83. |
+| Model cache directory | on | Later starts skip the Core ML compile: 2.16 s → 0.15 s in #83, before the content hash existed. |
 
 ### Parallel sessions
 
@@ -109,13 +109,14 @@ and fp16. Each ran on CPU-and-GPU, ALL and CPU-and-Neural-Engine over 16 real-fr
   CPU-and-Neural-Engine ran at CPU speed, because fp32 is barred from the Neural Engine; fp16
   with ALL hung inside one prediction for 40 minutes; fp16 (range) and fp32 (enumerated) on
   CPU-and-Neural-Engine produced no result within 5 minutes.
-- **No startup gain.** 1–8 s, against 0.15 s for ONNX Runtime with its model cache.
+- **No startup gain.** 1–8 s, against 0.15 s for ONNX Runtime with its model cache (#83's figure,
+  without the content hash).
 - **Accuracy was fine:** fp32 matched exactly; fp16 drifted ≤0.47 cents with no flips.
 
 ## ONNX Runtime caveats
 
-- **Stay on 1.28.** ONNX Runtime #32218 reports a ~10× Core ML slowdown on iOS in 1.29 against
-  1.28. Re-run `runner_probe` before moving the `ort` pin past a 1.28 build.
+- **The 1.29 slowdown.** ONNX Runtime #32218 reports a ~10× Core ML slowdown on iOS in 1.29
+  against 1.28; re-run `runner_probe` on macOS before moving the `ort` pin past 1.28.
 - **Neural Engine accuracy.** ONNX Runtime #33319: CPU-and-Neural-Engine loses accuracy on quiet
   audio-model log-power inputs. This is why the compute units exclude it.
 - **Not actively developed.** A maintainer comment on ONNX Runtime #26328 says the Core ML

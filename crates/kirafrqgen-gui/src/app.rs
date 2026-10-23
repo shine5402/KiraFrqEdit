@@ -47,13 +47,15 @@ const ADVANCED_STORAGE_KEY: &str = "advanced";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct AdvancedSettings {
-    /// The selected runner; absent in a store from before Core ML (#81),
-    /// where `directml` carries the choice.
+    /// The selected runner; absent in a store written in #81's format, where
+    /// `directml` carries the choice.
     runner: Option<StoredRunner>,
     /// The DirectML adapter index; `None` is the automatic choice.
     directml_device: Option<u32>,
     /// #81's only runner field: the DirectML runner was selected. Read when
-    /// `runner` is absent, never written.
+    /// `runner` is absent, never written. `false` is a CPU choice only where
+    /// DirectML was offered; elsewhere CPU was the only option, so it carries
+    /// no choice and the capability-aware default applies.
     #[serde(skip_serializing)]
     directml: bool,
 }
@@ -64,6 +66,26 @@ enum StoredRunner {
     Cpu,
     DirectMl,
     CoreMl,
+}
+
+impl From<StoredRunner> for MlRunner {
+    fn from(runner: StoredRunner) -> Self {
+        match runner {
+            StoredRunner::Cpu => MlRunner::Cpu,
+            StoredRunner::DirectMl => MlRunner::DirectMl,
+            StoredRunner::CoreMl => MlRunner::CoreMl,
+        }
+    }
+}
+
+impl From<MlRunner> for StoredRunner {
+    fn from(runner: MlRunner) -> Self {
+        match runner {
+            MlRunner::Cpu => StoredRunner::Cpu,
+            MlRunner::DirectMl => StoredRunner::DirectMl,
+            MlRunner::CoreMl => StoredRunner::CoreMl,
+        }
+    }
 }
 
 impl AdvancedSettings {
@@ -80,17 +102,16 @@ impl AdvancedSettings {
             return (default_ml_runner(usable), None);
         };
         let runner = match stored.runner {
-            Some(StoredRunner::Cpu) => MlRunner::Cpu,
-            Some(StoredRunner::DirectMl) => MlRunner::DirectMl,
-            Some(StoredRunner::CoreMl) => MlRunner::CoreMl,
+            Some(runner) => runner.into(),
             None if stored.directml => MlRunner::DirectMl,
-            None => MlRunner::Cpu,
+            None if DIRECTML_SUPPORTED => MlRunner::Cpu,
+            None => default_ml_runner(&usable),
         };
         match runner {
             MlRunner::Cpu => (MlRunner::Cpu, None),
             _ if !usable(runner) => (MlRunner::Cpu, None),
             MlRunner::DirectMl => (MlRunner::DirectMl, stored.directml_device),
-            _ => (runner, None),
+            MlRunner::CoreMl => (MlRunner::CoreMl, None),
         }
     }
 
@@ -98,11 +119,7 @@ impl AdvancedSettings {
     /// runner is selected.
     fn from_app(ml_runner: MlRunner, directml_device: Option<u32>) -> Self {
         Self {
-            runner: Some(match ml_runner {
-                MlRunner::Cpu => StoredRunner::Cpu,
-                MlRunner::DirectMl => StoredRunner::DirectMl,
-                MlRunner::CoreMl => StoredRunner::CoreMl,
-            }),
+            runner: Some(ml_runner.into()),
             directml_device: if ml_runner.is_directml() {
                 directml_device
             } else {
@@ -539,8 +556,6 @@ impl KiraFrqGenApp {
                 ui.add_enabled_ui(!self.is_running(), |ui| {
                     ui.label(RichText::new("ML RUNNER").size(13.0).strong());
                     ui.radio_value(&mut self.ml_runner, MlRunner::Cpu, "CPU");
-                    // Each GPU runner shows on its own platform only: a
-                    // radio where the build has it, else why not.
                     if DIRECTML_SUPPORTED {
                         ui.radio_value(&mut self.ml_runner, MlRunner::DirectMl, "DirectML");
                     } else if cfg!(windows) {
@@ -1705,10 +1720,16 @@ mod tests {
             ADVANCED_STORAGE_KEY,
             "(directml: false, directml_device: None)".to_owned(),
         );
+        // Where DirectML was offered, `false` was a processor choice; on a
+        // Mac, CPU was the only option, so Core ML's default takes over.
+        let expected = if DIRECTML_SUPPORTED {
+            MlRunner::Cpu
+        } else {
+            MlRunner::CoreMl
+        };
         assert_eq!(
-            AdvancedSettings::load(Some(&storage), |_| true),
-            (MlRunner::Cpu, None),
-            "an explicit processor choice is not replaced by the GPU default"
+            AdvancedSettings::load(Some(&storage), |runner| runner != MlRunner::DirectMl),
+            (expected, None)
         );
     }
 
