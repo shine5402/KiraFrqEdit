@@ -1,12 +1,13 @@
-//! The `kirafrqgen-cli` flags (#12): one required PATH, no subcommand.
+//! The `kirafrqgen-cli` flags (#12): one required PATH, no subcommand;
+//! `--serve` (#85) runs the ML server instead of a run.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
-#[cfg(feature = "ml")]
-use kirafrqgen_core::MlRunner;
 use kirafrqgen_core::{Estimator, F0Config, Target};
+#[cfg(feature = "ml")]
+use kirafrqgen_core::{MlRunner, MlServer};
 
 /// Bulk-generate frq tables for your UTAU voicebank.
 #[derive(Debug, Parser)]
@@ -17,7 +18,21 @@ use kirafrqgen_core::{Estimator, F0Config, Target};
 )]
 pub struct Cli {
     /// A voicebank folder (recursive scan) or a single .wav file.
-    #[arg(value_name = "PATH", required_unless_present_any = ["license", "license_full", "list_ml_devices"])]
+    #[cfg_attr(
+        feature = "ml",
+        arg(
+            value_name = "PATH",
+            required_unless_present_any = ["license", "license_full", "list_ml_devices", "serve"],
+            conflicts_with = "serve"
+        )
+    )]
+    #[cfg_attr(
+        not(feature = "ml"),
+        arg(
+            value_name = "PATH",
+            required_unless_present_any = ["license", "license_full", "list_ml_devices"]
+        )
+    )]
     pub path: Option<PathBuf>,
 
     /// Table formats to write: frq, pmk, mrq (comma-separated, repeatable).
@@ -31,8 +46,8 @@ pub struct Cli {
 
     /// ML execution provider for RMVPE and SwiftF0: `cpu` everywhere,
     /// `directml` on Windows (DirectX 12 GPU), `coreml` on Apple-silicon
-    /// Macs. Defaults to the platform's GPU runner when this machine can use
-    /// it, else CPU.
+    /// Macs, `remote` for an ML server (with `--ml-server`). Defaults to the
+    /// platform's GPU runner when this machine can use it, else CPU.
     #[cfg(feature = "ml")]
     #[arg(long, value_enum, value_name = "RUNNER")]
     pub ml_runner: Option<MlRunnerArg>,
@@ -42,6 +57,36 @@ pub struct Cli {
     #[cfg(feature = "ml")]
     #[arg(long, value_name = "N", requires = "ml_runner")]
     pub ml_device: Option<u32>,
+
+    /// The ML server for `--ml-runner remote`: HOST[:PORT], port 39470 by
+    /// default, IPv6 hosts in brackets (`[fe80::1]:39470`).
+    #[cfg(feature = "ml")]
+    #[arg(long, value_name = "HOST[:PORT]", value_parser = MlServer::parse)]
+    pub ml_server: Option<MlServer>,
+
+    /// The ML server's token, when it was started with `--token`.
+    #[cfg(feature = "ml")]
+    #[arg(long, value_name = "TOKEN", requires = "ml_server")]
+    pub ml_server_token: Option<String>,
+
+    /// Run as an ML server for other KiraFrqGen instances on the network
+    /// instead of generating tables; Ctrl-C stops it. `--ml-runner` and
+    /// `--jobs` apply to its ML estimators.
+    #[cfg(feature = "ml")]
+    #[arg(long, conflicts_with_all = ["dry_run", "list_ml_devices"])]
+    pub serve: bool,
+
+    /// The ML server's port; without it, 39470, or the next free port with a
+    /// warning.
+    #[cfg(feature = "ml")]
+    #[arg(long, value_name = "N")]
+    pub port: Option<u16>,
+
+    /// Lock the ML server with a shared token: a lock against casual use on
+    /// the network, not encryption.
+    #[cfg(feature = "ml")]
+    #[arg(long, value_name = "TOKEN")]
+    pub token: Option<String>,
 
     /// Apply tuning tailored to the workload, which helps reduce problems like
     /// over-voicing on breath and noise. Turn off to use the raw estimator
@@ -135,6 +180,10 @@ impl Cli {
             if config.ml.runner.is_directml() {
                 config.ml.directml_device = self.ml_device;
             }
+            if config.ml.runner.is_remote() {
+                config.ml.server = self.ml_server.clone();
+                config.ml.server_token = self.ml_server_token.clone();
+            }
         }
         config
     }
@@ -144,8 +193,26 @@ impl Cli {
     /// has can be checked here.
     pub fn validate_ml_flags(&self) -> Result<(), String> {
         #[cfg(feature = "ml")]
-        if self.ml_device.is_some() && !matches!(self.ml_runner, Some(MlRunnerArg::DirectMl)) {
-            return Err("--ml-device needs --ml-runner directml".to_string());
+        {
+            let remote = matches!(self.ml_runner, Some(MlRunnerArg::Remote));
+            if self.ml_device.is_some() && !matches!(self.ml_runner, Some(MlRunnerArg::DirectMl)) {
+                return Err("--ml-device needs --ml-runner directml".to_string());
+            }
+            // clap's `requires` counts an absent bool flag as present.
+            if !self.serve && (self.port.is_some() || self.token.is_some()) {
+                return Err("--port and --token need --serve".to_string());
+            }
+            if self.serve && remote {
+                return Err(
+                    "an ML server cannot use the remote runner; pick a local one".to_string(),
+                );
+            }
+            if remote && self.ml_server.is_none() {
+                return Err("--ml-runner remote needs --ml-server HOST[:PORT]".to_string());
+            }
+            if self.ml_server.is_some() && !remote {
+                return Err("--ml-server needs --ml-runner remote".to_string());
+            }
         }
         Ok(())
     }
@@ -249,12 +316,13 @@ pub enum MlRunnerArg {
     Cpu,
     DirectMl,
     CoreMl,
+    Remote,
 }
 
 #[cfg(feature = "ml")]
 impl clap::ValueEnum for MlRunnerArg {
     fn value_variants<'a>() -> &'a [Self] {
-        &[Self::Cpu, Self::DirectMl, Self::CoreMl]
+        &[Self::Cpu, Self::DirectMl, Self::CoreMl, Self::Remote]
     }
 
     fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
@@ -262,6 +330,7 @@ impl clap::ValueEnum for MlRunnerArg {
             MlRunnerArg::Cpu => "cpu",
             MlRunnerArg::DirectMl => "directml",
             MlRunnerArg::CoreMl => "coreml",
+            MlRunnerArg::Remote => "remote",
         };
         let runner = MlRunner::from(*self);
         Some(clap::builder::PossibleValue::new(name).help(runner.description()))
@@ -275,6 +344,7 @@ impl From<MlRunnerArg> for MlRunner {
             MlRunnerArg::Cpu => MlRunner::Cpu,
             MlRunnerArg::DirectMl => MlRunner::DirectMl,
             MlRunnerArg::CoreMl => MlRunner::CoreMl,
+            MlRunnerArg::Remote => MlRunner::Remote,
         }
     }
 }
@@ -474,6 +544,72 @@ mod tests {
             None,
             "a device without a DirectML runner is dropped"
         );
+    }
+
+    #[cfg(feature = "ml")]
+    #[test]
+    fn the_remote_runner_carries_the_server_and_token() {
+        let cli = parse_ok(&[
+            "bank",
+            "--ml-runner",
+            "remote",
+            "--ml-server",
+            "[fe80::1]",
+            "--ml-server-token",
+            "secret",
+        ]);
+        assert!(cli.validate_ml_flags().is_ok());
+        let ml = cli.f0_config().ml;
+        assert_eq!(ml.runner, MlRunner::Remote);
+        assert_eq!(
+            ml.server,
+            Some(MlServer {
+                host: "fe80::1".to_string(),
+                port: 39470
+            })
+        );
+        assert_eq!(ml.server_token.as_deref(), Some("secret"));
+
+        assert!(
+            parse_ok(&["bank", "--ml-runner", "remote"])
+                .validate_ml_flags()
+                .is_err()
+        );
+        assert!(
+            parse_ok(&["bank", "--ml-server", "mac.local"])
+                .validate_ml_flags()
+                .is_err()
+        );
+        assert!(
+            parse_ok(&["--serve", "--ml-runner", "remote"])
+                .validate_ml_flags()
+                .is_err()
+        );
+        assert_eq!(
+            parse(&["bank", "--ml-server", "mac.local:0"])
+                .unwrap_err()
+                .exit_code(),
+            2
+        );
+    }
+
+    #[cfg(feature = "ml")]
+    #[test]
+    fn serve_needs_no_path_and_owns_port_and_token() {
+        let cli = parse_ok(&["--serve", "--port", "40000", "--token", "secret", "-j", "2"]);
+        assert!(cli.serve);
+        assert_eq!(cli.path, None);
+        assert_eq!(cli.port, Some(40000));
+        assert_eq!(cli.token.as_deref(), Some("secret"));
+        for args in [&["--serve", "bank"][..], &["--serve", "--dry-run"][..]] {
+            assert_eq!(parse(args).unwrap_err().exit_code(), 2, "{args:?}");
+        }
+        for args in [
+            &["bank", "--port", "40000"][..],
+            &["bank", "--token", "secret"][..],
+        ] {
+            assert!(parse_ok(args).validate_ml_flags().is_err(), "{args:?}");
+        }
     }
 
     #[test]

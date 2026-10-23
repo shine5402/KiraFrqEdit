@@ -36,6 +36,10 @@ fn run(cli: Cli) -> u8 {
         eprintln!("error: {message}");
         return 2;
     }
+    #[cfg(feature = "ml")]
+    if cli.serve {
+        return kirafrqgen_cli::serve::run(&cli);
+    }
     if cli.list_ml_devices {
         return match kirafrqgen_core::ml_devices() {
             Ok(devices) if devices.is_empty() => {
@@ -89,6 +93,19 @@ fn run(cli: Cli) -> u8 {
         // Whether caches are deleted is re-resolved below, against the plan.
         delete_llsm: true,
     };
+
+    // Before the scan (#85): a misconfigured ML server is one early error, and
+    // the default estimator follows what the server offers. A dry run never
+    // estimates, so it never asks.
+    if !cli.dry_run {
+        match kirafrqgen_cli::resolve_remote(cli.estimator.is_some(), &mut opts.f0) {
+            Ok(warning) => config_warnings.extend(warning),
+            Err(message) => {
+                eprintln!("error: {message}");
+                return 1;
+            }
+        }
+    }
 
     let started = Instant::now();
     let plan = match plan(&opts) {
